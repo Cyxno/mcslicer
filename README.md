@@ -91,6 +91,18 @@ npm run build     # tsc + vite build
 npm run gen:fixture   # regenerate tests/fixtures/demo-huisje.schem
 ```
 
+### Fixtures
+
+- `tests/fixtures/demo-huisje.schem` — generated demo house
+  (`npm run gen:fixture`).
+- `tests/fixtures/phantommarket-f64.schem` — a **real third-party file**
+  (PhantomMarket "Super Easy 64 Furnace Auto Smelter", Java `.schem`
+  conversion, 3415 bytes, sha1 `d0fb5d655ac3b47b059c6200bfe827b2def2ea35`,
+  Sponge v2 hybrid: Version 2 header + v3 palette layout). Treated
+  read-only: never regenerate or reformat it.
+  `scripts/gen-phantom-fixture.ts` still exists but only as a synthetic
+  fallback shape-reference; the committed fixture is the authentic bytes.
+
 ### Regenerating the fixture
 
 The demo house is generated, not hand-made, so it can be tweaked and rebuilt deterministically:
