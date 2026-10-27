@@ -36,17 +36,62 @@ export function normalizeAssetPath(rawPath: string): string | null {
 
 const TEXT_EXTENSIONS = /\.(json|mcmeta)$/;
 
+/**
+ * Launcher assets-layout: ".minecraft/assets" is a content-addressed
+ * store, not unpacked files — "indexes/<ver>.json" maps virtual paths
+ * ("minecraft:blockstates/furnace.json") to sha1 hashes, the bytes live
+ * in "objects/<hash[:2]>/<hash>" (no extensions). Every index we find is
+ * parsed and virtual paths resolve through it, so users can point the
+ * app at their real .minecraft/assets directory.
+ */
+interface AssetIndex {
+  objects: Record<string, { hash: string }>;
+}
+
+function parseAssetIndex(bytes: Uint8Array): Map<string, string> {
+  const out = new Map<string, string>();
+  try {
+    const index = JSON.parse(new TextDecoder().decode(bytes)) as AssetIndex;
+    for (const [virtualPath, entry] of Object.entries(index.objects ?? {})) {
+      if (entry && typeof entry.hash === 'string') out.set(virtualPath.toLowerCase(), entry.hash);
+    }
+  } catch {
+    // Broken index: ignore it; direct lookups still work.
+  }
+  return out;
+}
+
 export function buildAssetFiles(entries: Iterable<[string, Uint8Array]>): AssetFiles {
   const files = new Map<string, Uint8Array>();
+  const virtualToHash = new Map<string, string>();
   for (const [path, bytes] of entries) {
     const normalized = normalizeAssetPath(path);
     if (!normalized) continue;
     files.set(normalized, bytes);
+    if (/^indexes\/[^/]+\.json$/.test(normalized)) {
+      for (const [virtual, hash] of parseAssetIndex(bytes)) {
+        if (!virtualToHash.has(virtual)) virtualToHash.set(virtual, hash);
+      }
+    }
+  }
+  const objects = new Map<string, Uint8Array>();
+  for (const [path, bytes] of files) {
+    if (path.startsWith('objects/')) objects.set(path, bytes);
   }
   return {
-    get: (p) => files.get(p.toLowerCase()),
-    has: (p) => files.has(p.toLowerCase()),
-    paths: () => [...files.keys()].sort(),
+    get: (p) => {
+      const key = p.toLowerCase().replace(/:/g, '/');
+      const direct = files.get(key);
+      if (direct) return direct;
+      const hash = virtualToHash.get(key);
+      if (hash) return objects.get(`objects/${hash.slice(0, 2)}/${hash}`);
+      return undefined;
+    },
+    has: (p) => {
+      const key = p.toLowerCase().replace(/:/g, '/');
+      return files.has(key) || virtualToHash.has(key);
+    },
+    paths: () => [...new Set([...files.keys(), ...virtualToHash.keys()])].sort(),
   };
 }
 
@@ -65,9 +110,16 @@ export function readJsonAsset(files: AssetFiles, path: string): unknown {
 export function treeFromAssetFiles(files: AssetFiles): AssetsTree {
   const parsed = new Map<string, unknown>();
   for (const path of files.paths()) {
-    if (!path.endsWith('.json')) continue;
-    const value = readJsonAsset(files, path);
-    if (value !== undefined) parsed.set(path, value);
+    if (path.endsWith('.json')) {
+      const value = readJsonAsset(files, path);
+      if (value !== undefined) parsed.set(path, value);
+    } else if (files.get(path)) {
+      // Non-JSON (textures): presence stub under the colon-form the
+      // resolver queries ("minecraft:textures/…"); the atlas reads the
+      // bytes separately via files.get().
+      const colon = path.replace('/', ':');
+      parsed.set(colon, {});
+    }
   }
   return parsed;
 }

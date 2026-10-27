@@ -186,34 +186,7 @@ export class Viewer {
       }
       this.assets = files;
       this.assetTree = tree;
-
-      // Collect the texture paths the palette resolves to, then build the
-      // atlas from exactly those (plus per-face extras).
-      const paths = new Set<string>();
-      let resolvedCount = 0;
-      const palette = this.schem?.palette ?? [];
-      for (let i = 0; i < palette.length; i++) {
-        const r = resolveBlockstate(palette[i]!, tree);
-        if (!r) continue;
-        resolvedCount++;
-        for (const face of [r.faces.px, r.faces.nx, r.faces.py, r.faces.ny, r.faces.pz, r.faces.nz]) {
-          if (face) paths.add(face);
-        }
-        if (r.texturePath) paths.add(r.texturePath);
-      }
-      this.atlasTexture?.dispose();
-      this.atlas = await buildAtlas(files, [...paths].sort());
-      this.atlasTexture = new CanvasTexture(this.atlas.canvas);
-      this.atlasTexture.magFilter = NearestFilter;
-      this.atlasTexture.minFilter = NearestFilter;
-      this.atlasTexture.generateMipmaps = false;
-      this.atlasTexture.colorSpace = 'srgb';
-
-      const problems =
-        this.atlas.missing.length + this.atlas.broken.length > 0
-          ? `, ${this.atlas.missing.length + this.atlas.broken.length} textures → kleur-fallback`
-          : '';
-      this.lastTextureReport = `${resolvedCount} types met texture${problems}`;
+      this.atlasPaletteKey = ''; // force rebuild against this source
     } catch (err) {
       this.assets = null;
       this.assetTree = null;
@@ -223,10 +196,54 @@ export class Viewer {
       this.setStatus(`Textures niet geladen: ${detail}`, true);
       return;
     }
-    if (this.schem) this.showSlicer(this.schem, this.model?.axis ?? 'y');
+    if (this.schem) {
+      await this.ensureAtlas(this.schem);
+      this.showSlicer(this.schem, this.model?.axis ?? 'y');
+    } else {
+      this.setStatus(`Textures geladen (${label}) — laad of wissel een .schem om te renderen`);
+    }
+  }
+
+  /** Build/rebuild the atlas when the palette's texture set changed. */
+  private async ensureAtlas(schem: Schematic): Promise<void> {
+    if (!this.assets || !this.assetTree) return;
+    const paths = new Set<string>();
+    let resolvedCount = 0;
+    let unresolvedCount = 0;
+    for (const entry of schem.palette) {
+      const r = resolveBlockstate(entry, this.assetTree);
+      if (!r) {
+        unresolvedCount++;
+        continue;
+      }
+      resolvedCount++;
+      for (const face of [r.faces.px, r.faces.nx, r.faces.py, r.faces.ny, r.faces.pz, r.faces.nz]) {
+        if (face) paths.add(face);
+      }
+      if (r.texturePath) paths.add(r.texturePath);
+    }
+    const key = [...paths].sort().join('|');
+    if (key === this.atlasPaletteKey && this.atlas) return;
+
+    this.atlasTexture?.dispose();
+    this.atlas = await buildAtlas(this.assets, [...paths].sort());
+    this.atlasTexture = new CanvasTexture(this.atlas.canvas);
+    this.atlasTexture.magFilter = NearestFilter;
+    this.atlasTexture.minFilter = NearestFilter;
+    this.atlasTexture.generateMipmaps = false;
+    this.atlasTexture.colorSpace = 'srgb';
+    this.atlasPaletteKey = key;
+
+    const problems =
+      this.atlas.missing.length + this.atlas.broken.length > 0
+        ? `, ${this.atlas.missing.length + this.atlas.broken.length} textures → kleur-fallback`
+        : '';
+    this.lastTextureReport = `${resolvedCount} types met texture` +
+      (unresolvedCount > 0 ? `, ${unresolvedCount} zonder blockstate` : '') + problems;
   }
 
   private assetTree: ReadonlyMap<string, unknown> | null = null;
+  private atlasPaletteKey = '';
 
   /** Frame the model and set the group transform used by both modes. */
   private frameModel(scale: number, size: Schematic['size']): void {
@@ -243,6 +260,8 @@ export class Viewer {
     this.setStatus(`Parsing ${label}…`);
     try {
       const schem = await parseSchem(bytes);
+      this.schem = schem; // available for ensureAtlas before showSlicer
+      await this.ensureAtlas(schem);
       this.showSlicer(schem, axis);
     } catch (err) {
       this.clearModel();
