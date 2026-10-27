@@ -56,6 +56,8 @@ import { boxFaceUVs } from '../textures/faces.js';
 import { buildAtlas, type AtlasResult } from '../textures/loader.js';
 import { treeFromAssetFiles, type AssetFiles } from '../textures/assets.js';
 import { tintForBlock } from '../textures/tint.js';
+import { chooseSource, sourceStatusLine, type TextureSourceKind } from '../textures/sources.js';
+import { pendingPaths, treeFromRemote, createRemoteSource, type RemoteSource } from '../textures/remote.js';
 
 const BLOCK = new BoxGeometry(1, 1, 1);
 const DIM_FACTOR = 0.28;
@@ -269,42 +271,114 @@ export class Viewer {
     }
   }
 
-  /** Build/rebuild the atlas when the palette's texture set changed. */
+  /**
+   * Build/rebuild the atlas when the palette's texture set changed.
+   * Source order: user assets (map/zip) > same-origin default-assets >
+   * color fallback — per type, and the split is reported per source.
+   */
   private async ensureAtlas(schem: Schematic): Promise<void> {
-    if (!this.assets || !this.assetTree) return;
+    const hasUser = !!this.assets && !!this.assetTree;
+    const hasDefault = !!this.defaultSource;
+    if (!hasUser && !hasDefault) {
+      this.lastTextureReport = sourceStatusLine({ user: 0, default: 0, fallback: 0 });
+      return;
+    }
+
+    // Warm the default cache: resolve against it, fetch what it has but
+    // the cache lacks, repeat until stable (parents surface per pass).
+    if (this.defaultSource && this.defaultSource.cached() === 0) {
+      const wanted = new Set<string>();
+      for (const entry of schem.palette) {
+        const base = entry.split('[')[0]!;
+        const ns = base.includes(':') ? base.slice(0, base.indexOf(':')) : 'minecraft';
+        const name = base.slice(base.indexOf(':') + 1);
+        wanted.add(`${ns}/blockstates/${name}.json`);
+      }
+      await this.defaultSource.ensure([...wanted]);
+    }
+    if (this.defaultSource) {
+      for (let pass = 0; pass < 4; pass++) {
+        const wanted: string[] = [];
+        for (const entry of schem.palette) {
+          if (this.userUsable(entry)) continue;
+          const rd = this.defaultSource
+            ? resolveBlockstate(entry, treeFromRemote(this.defaultSource))
+            : null;
+          if (!rd) continue;
+          for (const f of [rd.faces.px, rd.faces.nx, rd.faces.py, rd.faces.ny, rd.faces.pz, rd.faces.nz]) {
+            if (f) wanted.push(f);
+          }
+          if (rd.texturePath) wanted.push(rd.texturePath);
+        }
+        if (pendingPaths(this.defaultSource, wanted).length === 0) break;
+        await this.defaultSource.ensure(wanted);
+      }
+    }
+
+    // Choose a source per palette entry and collect atlas textures.
+    const dtree = hasDefault ? treeFromRemote(this.defaultSource!) : null;
+    const defaultUsable = (entry: string): boolean => {
+      if (!dtree) return false;
+      const r = resolveBlockstate(entry, dtree);
+      return !!r && !r.incomplete && !!r.texturePath && !!this.defaultSource?.has(r.texturePath);
+    };
     const paths = new Set<string>();
-    let resolvedCount = 0;
+    const counts: Record<TextureSourceKind, number> = { user: 0, default: 0, fallback: 0 };
     let unresolvedCount = 0;
     for (const entry of schem.palette) {
-      const r = resolveBlockstate(entry, this.assetTree);
-      if (!r) {
+      if (entry === 'minecraft:air') continue;
+      const ru = this.userUsable(entry);
+      const rd = defaultUsable(entry);
+      const kind = chooseSource(ru, rd);
+      if (kind === 'fallback') {
         unresolvedCount++;
         continue;
       }
-      resolvedCount++;
-      for (const face of [r.faces.px, r.faces.nx, r.faces.py, r.faces.ny, r.faces.pz, r.faces.nz]) {
-        if (face) paths.add(face);
+      counts[kind]++;
+      const r = kind === 'user'
+        ? resolveBlockstate(entry, this.assetTree!)!
+        : resolveBlockstate(entry, dtree!)!;
+      for (const f of [r.faces.px, r.faces.nx, r.faces.py, r.faces.ny, r.faces.pz, r.faces.nz]) {
+        if (f) paths.add(f);
       }
       if (r.texturePath) paths.add(r.texturePath);
     }
-    const key = [...paths].sort().join('|');
-    if (key === this.atlasPaletteKey && this.atlas) return;
 
-    this.atlasTexture?.dispose();
-    this.atlas = await buildAtlas(this.assets, [...paths].sort());
-    this.atlasTexture = new CanvasTexture(this.atlas.canvas);
-    this.atlasTexture.magFilter = NearestFilter;
-    this.atlasTexture.minFilter = NearestFilter;
-    this.atlasTexture.generateMipmaps = false;
-    this.atlasTexture.colorSpace = 'srgb';
-    this.atlasPaletteKey = key;
+    const key = `${hasUser ? 'u' : '-'}${hasDefault ? 'd' : '-'}|${[...paths].sort().join('|')}`;
+    if (key !== this.atlasPaletteKey || !this.atlas) {
+      const getBytes = (p: string): Uint8Array | undefined =>
+        this.assets?.get(p) ?? this.defaultSource?.getBytes(p);
+      this.atlasTexture?.dispose();
+      this.atlas = await buildAtlas(getBytes, [...paths].sort());
+      this.atlasTexture = new CanvasTexture(this.atlas.canvas);
+      this.atlasTexture.magFilter = NearestFilter;
+      this.atlasTexture.minFilter = NearestFilter;
+      this.atlasTexture.generateMipmaps = false;
+      this.atlasTexture.colorSpace = 'srgb';
+      this.atlasPaletteKey = key;
+    }
+    counts.fallback += unresolvedCount;
+    this.lastTextureReport = sourceStatusLine(counts);
+  }
 
-    const problems =
-      this.atlas.missing.length + this.atlas.broken.length > 0
-        ? `, ${this.atlas.missing.length + this.atlas.broken.length} textures → kleur-fallback`
-        : '';
-    this.lastTextureReport = `${resolvedCount} types met texture` +
-      (unresolvedCount > 0 ? `, ${unresolvedCount} zonder blockstate` : '') + problems;
+  /** User assets resolve this entry completely (textures present)? */
+  private userUsable(entry: string): boolean {
+    if (!this.assetTree || !this.assets) return false;
+    const r = resolveBlockstate(entry, this.assetTree);
+    return !!r && !r.incomplete && !!r.texturePath && this.assets.has(r.texturePath);
+  }
+
+  private defaultSource: RemoteSource | null = null;
+
+  /** Install the same-origin default-assets source (manifest fetched). */
+  setDefaultSource(source: RemoteSource | null): void {
+    this.defaultSource = source;
+    this.atlasPaletteKey = '';
+    if (this.schem) {
+      void this.ensureAtlas(this.schem).then(() => {
+        if (this.schem) this.showSlicer(this.schem, this.model?.axis ?? 'y');
+      });
+    }
   }
 
   private assetTree: ReadonlyMap<string, unknown> | null = null;
@@ -427,7 +501,7 @@ export class Viewer {
     const typeToSlot = new Map<number, number>();
     this.typeToSlot = typeToSlot;
     const typeGeometry = new Map<number, BufferGeometry>();
-    let texturedTypes = 0;
+    
     for (const p of paletteIndices) {
       const block = schem.palette[p]!;
       const color = typeColors.get(p)!;
@@ -461,7 +535,6 @@ export class Viewer {
         this.dimMats.push(
           new MeshLambertMaterial({ map: this.atlasTexture, color: new Color(tint ?? 0xffffff).multiplyScalar(DIM_FACTOR) }),
         );
-        texturedTypes++;
       } else {
         const bright = new MeshLambertMaterial({ color });
         const dimColor = new Color(color).multiplyScalar(DIM_FACTOR);
@@ -509,7 +582,7 @@ export class Viewer {
     this.setStatus(
       `${schem.size.x}×${schem.size.y}×${schem.size.z} — ${this.model.total} blocks, ` +
       `${paletteIndices.length} types, ${slices.length} lagen langs ${axisNames[axis]}` +
-      (texturedTypes > 0 && this.lastTextureReport ? ` · textures: ${this.lastTextureReport}` : ''),
+      (this.lastTextureReport ? ` · textures: ${this.lastTextureReport}` : ''),
     );
   }
 
@@ -891,6 +964,29 @@ export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, dem
     const banner = $('slice-banner');
     if (banner) banner.hidden = true;
   });
+
+  // Default-assets: same-origin fetch (no directory picker needed). A
+  // missing manifest simply keeps color mode — operator supplies the set
+  // via scripts/prepare-default-assets.sh; user assets stay the override.
+  void (async () => {
+    try {
+      const url = new URL('default-assets/manifest.json', document.baseURI);
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const data = (await res.json()) as { files?: unknown };
+      if (!Array.isArray(data.files)) return;
+      const base = new URL('default-assets/', document.baseURI);
+      viewer.setDefaultSource(
+        createRemoteSource(data.files as string[], async (p) => {
+          const r = await fetch(new URL(p, base));
+          if (!r.ok) return undefined;
+          return new Uint8Array(await r.arrayBuffer());
+        }),
+      );
+    } catch {
+      // no default set available: color mode, never an error to the user
+    }
+  })();
 
   // Axis buttons
   let currentAxis: Axis = 'y';

@@ -1,7 +1,7 @@
 /**
  * Canvas-atlas builder for user-supplied block textures (browser side).
  *
- * Decodes the PNGs an AssetFiles tree contains for the texture paths the
+ * Decodes the PNGs the configured sources contain for the texture paths the
  * blockstate resolver requested, lays them out in a grid on one canvas,
  * and returns per-texture UV rects. Missing or undecodable textures are
  * reported in `missing`/`broken` — the viewer falls back to its color
@@ -13,7 +13,6 @@
  * Wat hier wél getest wordt is de pure layout (`planAtlas`).
  */
 import type { UVRect } from './atlas.js';
-import type { AssetFiles } from './assets.js';
 
 export interface AtlasPlan {
   cols: number;
@@ -53,14 +52,20 @@ async function decodePng(bytes: Uint8Array): Promise<ImageBitmap> {
 /**
  * Build the atlas. `texturePaths` are normalized paths
  * ("minecraft:textures/block/stone.png"); order determines grid position,
- * so the caller controls determinism.
+ * so the caller controls determinism. `getBytes` abstracts the source
+ * (user AssetFiles, remote default cache, or a mix) so sources can be
+ * layered per path.
  */
-export async function buildAtlas(files: AssetFiles, texturePaths: string[], cell = 16): Promise<AtlasResult> {
+export async function buildAtlas(
+  getBytes: (path: string) => Uint8Array | undefined,
+  texturePaths: string[],
+  cell = 16,
+): Promise<AtlasResult> {
   const missing: string[] = [];
   const broken: string[] = [];
   const present: { path: string; bytes: Uint8Array }[] = [];
   for (const path of texturePaths) {
-    const bytes = files.get(path);
+    const bytes = getBytes(path);
     if (!bytes) {
       missing.push(path);
       continue;

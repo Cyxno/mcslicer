@@ -47,6 +47,9 @@ Parse and rendering run entirely in the browser: **schematic files are never upl
   textures; vertical layer rail with axis switcher; dark theme with a
   bottom-center toolbar, status HUD, slice banner and "on your device"
   badge)
+- [x] **Phase 4c — default textures out of the box** (operator-supplied
+  default set via `scripts/prepare-default-assets.sh`, same-origin lazy
+  fetch; user assets remain the override; see "Your own block textures")
 
 ## Your own block textures (phase 4a)
 
@@ -54,14 +57,47 @@ mcslicer can render blocks with **real textures from your own Minecraft
 assets**. The vanilla assets are never shipped with this repo — you point
 the app at them yourself:
 
+- **Out of the box (default set):** run
+  `scripts/prepare-default-assets.sh <pad-of-url-naar-zip>` once on the
+  machine hosting mcslicer. It extracts `blockstates/`, `models/` and
+  `textures/` from a vanilla-template zip, a launcher assets export, or
+  any resource-pack zip into `public/default-assets/` (gitignored) plus a
+  `manifest.json`. From then on the viewer loads its textures from
+  there via a plain same-origin fetch — no directory picker needed, so it
+  also works where `webkitdirectory` cannot. Bad input fails cleanly:
+  no zip, a corrupt zip, or a zip without blockstates/models/textures
+  aborts with a message and leaves any previous set untouched.
 - **"Textures: map…"** — pick a directory tree containing an `assets/`
-  root, e.g. `.minecraft/assets` (the unpacked client assets) or an
-  unpacked resource pack.
+  root, e.g. `.minecraft/assets` (launcher layout with `indexes/` +
+  `objects/` works too) or an unpacked resource pack.
 - **"Textures: zip…"** — pick a resource pack or assets `.zip`.
 
-**Privacy model:** everything is read in the browser with the File API and
-stays in memory on your machine. **Nothing is uploaded, no network request
-is made** — the app has no server-side processing at all (that is a
+**Source order:** user assets (map/zip) override the default set, which
+overrides the color fallback — decided per block type, and the status
+bar reports the split, e.g.
+`2 types (eigen assets), 30 types (default assets), 2 kleur-fallback`.
+
+**Why the default set is not in the repo:** vanilla textures are Mojang's
+copyrighted assets and may not be redistributed. Every operator supplies
+their own copy; the repo only carries the pipeline. For the same reason
+the textures work only on your own (self-hosted) instance.
+
+**Docker/self-hosting:** `public/default-assets/` can simply be baked
+into the nginx image (copy it before `docker build`), or mounted over
+without a rebuild:
+
+```yaml
+volumes:
+  - ./assets:/usr/share/nginx/html/default-assets:ro
+```
+
+where `./assets` is the output of the prepare script (directory with
+`minecraft/…` and `manifest.json`).
+
+**Privacy model:** everything is read in the browser with the File API
+and stays in memory on your machine. **Nothing is uploaded, no network
+request is made** except the same-origin fetch of the default set from
+your own server — there is no server-side processing at all (that is a
 non-goal per phase table above).
 
 **How it works:**
