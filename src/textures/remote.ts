@@ -78,6 +78,72 @@ export function pendingPaths(source: RemoteSource, wanted: string[]): string[] {
 }
 
 /**
+ * All asset paths the palette needs, discovered from whatever is cached so
+ * far: blockstates, their variant/multipart model refs, model parents, and
+ * non-"#ref" texture values. Layered assets surface one layer per call —
+ * a model's parent only becomes known once that model is cached — so run
+ * this inside an ensure loop until pendingPaths(...) is empty.
+ *
+ * Model/textures refs may carry a namespace ("minecraft:block/furnace");
+ * both are normalized to slash-form paths under minecraft/.
+ */
+export function wantedPathsForPalette(source: RemoteSource, palette: string[]): string[] {
+  const wanted: string[] = [];
+  const modelRefs: string[] = [];
+  const textureValues: string[] = [];
+  for (const entry of palette) {
+    const base = entry.split('[')[0] ?? entry;
+    const colon = base.indexOf(':');
+    const ns = colon === -1 ? 'minecraft' : base.slice(0, colon);
+    const name = colon === -1 ? base : base.slice(colon + 1);
+    const statePath = `${ns}/blockstates/${name}.json`;
+    wanted.push(statePath);
+    const state = source.json(statePath) as
+      | {
+          variants?: Record<string, unknown>;
+          multipart?: { apply?: unknown }[];
+        }
+      | undefined;
+    if (!state || typeof state !== 'object') continue;
+    const collectRefs = (variant: unknown): void => {
+      for (const v of Array.isArray(variant) ? variant : [variant]) {
+        if (v && typeof v === 'object' && typeof (v as { model?: unknown }).model === 'string') {
+          modelRefs.push((v as { model: string }).model);
+        }
+      }
+    };
+    if (state.variants) for (const variant of Object.values(state.variants)) collectRefs(variant);
+    for (const part of state.multipart ?? []) collectRefs(part.apply);
+  }
+  for (const ref of modelRefs) {
+    const colon = ref.indexOf(':');
+    const rel = colon === -1 ? ref : ref.slice(colon + 1);
+    const modelPath = `minecraft/models/${rel}.json`;
+    wanted.push(modelPath);
+    const model = source.json(modelPath) as { parent?: unknown; textures?: Record<string, unknown> } | undefined;
+    if (!model || typeof model !== 'object') continue;
+    if (typeof model.parent === 'string') modelRefs.push(model.parent);
+    for (const value of Object.values(model.textures ?? {})) {
+      // Vanilla (1.20.5+) allows object values: { sprite: "block/x", ... }.
+      const tex =
+        typeof value === 'string'
+          ? value
+          : value && typeof value === 'object' && typeof (value as { sprite?: unknown }).sprite === 'string'
+            ? (value as { sprite: string }).sprite
+            : null;
+      if (tex && !tex.startsWith('#')) textureValues.push(tex);
+    }
+  }
+  for (const value of textureValues) {
+    const colon = value.indexOf(':');
+    const ns = colon === -1 ? 'minecraft' : value.slice(0, colon);
+    const rel = colon === -1 ? value : value.slice(colon + 1);
+    wanted.push(`${ns}/textures/${rel}.png`);
+  }
+  return wanted;
+}
+
+/**
  * View the remote cache as the parsed AssetsTree the resolver wants:
  * JSON entries as parsed objects, textures as presence stubs in colon
  * form (the resolver queries "minecraft:textures/…", files are slash-form).

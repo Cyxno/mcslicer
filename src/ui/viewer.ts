@@ -57,7 +57,7 @@ import { buildAtlas, type AtlasResult } from '../textures/loader.js';
 import { treeFromAssetFiles, type AssetFiles } from '../textures/assets.js';
 import { tintForBlock } from '../textures/tint.js';
 import { chooseSource, sourceStatusLine, type TextureSourceKind } from '../textures/sources.js';
-import { pendingPaths, treeFromRemote, createRemoteSource, type RemoteSource } from '../textures/remote.js';
+import { pendingPaths, treeFromRemote, createRemoteSource, wantedPathsForPalette, type RemoteSource } from '../textures/remote.js';
 
 const BLOCK = new BoxGeometry(1, 1, 1);
 const DIM_FACTOR = 0.28;
@@ -284,32 +284,12 @@ export class Viewer {
       return;
     }
 
-    // Warm the default cache: resolve against it, fetch what it has but
-    // the cache lacks, repeat until stable (parents surface per pass).
-    if (this.defaultSource && this.defaultSource.cached() === 0) {
-      const wanted = new Set<string>();
-      for (const entry of schem.palette) {
-        const base = entry.split('[')[0]!;
-        const ns = base.includes(':') ? base.slice(0, base.indexOf(':')) : 'minecraft';
-        const name = base.slice(base.indexOf(':') + 1);
-        wanted.add(`${ns}/blockstates/${name}.json`);
-      }
-      await this.defaultSource.ensure([...wanted]);
-    }
+    // Warm the default cache: discover wanted paths from what is cached,
+    // fetch what the manifest has, repeat until stable (each pass surfaces
+    // one more layer: blockstates -> models -> parents -> textures).
     if (this.defaultSource) {
-      for (let pass = 0; pass < 4; pass++) {
-        const wanted: string[] = [];
-        for (const entry of schem.palette) {
-          if (this.userUsable(entry)) continue;
-          const rd = this.defaultSource
-            ? resolveBlockstate(entry, treeFromRemote(this.defaultSource))
-            : null;
-          if (!rd) continue;
-          for (const f of [rd.faces.px, rd.faces.nx, rd.faces.py, rd.faces.ny, rd.faces.pz, rd.faces.nz]) {
-            if (f) wanted.push(f);
-          }
-          if (rd.texturePath) wanted.push(rd.texturePath);
-        }
+      for (let pass = 0; pass < 8; pass++) {
+        const wanted = wantedPathsForPalette(this.defaultSource, schem.palette);
         if (pendingPaths(this.defaultSource, wanted).length === 0) break;
         await this.defaultSource.ensure(wanted);
       }

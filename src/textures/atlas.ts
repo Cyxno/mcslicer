@@ -88,10 +88,18 @@ interface ModelJson {
   textures?: Record<string, string>;
 }
 
+/** Strip an optional namespace: "minecraft:block/x" → "block/x". */
+function stripNamespace(ref: string): string {
+  const colon = ref.indexOf(':');
+  return colon === -1 ? ref : ref.slice(colon + 1);
+}
+
 /**
  * Merge a model's textures over its parent chain (child wins), resolving
- * "#ref" values against the merged map. Returns null when a model file or
- * a parent link is missing.
+ * "#ref" values against the merged map. Returns null only when the first
+ * model file is missing; missing parents (e.g. builtin/generated, which
+ * has no file in any resource pack) end the chain with the textures
+ * collected so far — vanilla treats those as terminal.
  */
 function resolveModelTextures(ref: string, tree: AssetsTree): Record<string, string> | null {
   const chain: ModelJson[] = [];
@@ -100,13 +108,26 @@ function resolveModelTextures(ref: string, tree: AssetsTree): Record<string, str
   while (current) {
     if (seen.has(current)) return null; // parent cycle
     seen.add(current);
-    const model = tree.get(`minecraft/models/${current}.json`) as ModelJson | undefined;
-    if (!model || typeof model !== 'object') return null;
+    const model = tree.get(`minecraft/models/${stripNamespace(current)}.json`) as ModelJson | undefined;
+    if (!model || typeof model !== 'object') {
+      if (chain.length === 0) return null;
+      break;
+    }
     chain.unshift(model);
     current = model.parent;
   }
   const merged: Record<string, string> = {};
-  for (const model of chain) Object.assign(merged, model.textures ?? {});
+  for (const model of chain) {
+    for (const [key, value] of Object.entries(model.textures ?? {})) {
+      // Vanilla (1.20.5+) allows object values: { sprite: "block/x", ... }.
+      merged[key] =
+        typeof value === 'string'
+          ? value
+          : value && typeof value === 'object' && typeof (value as { sprite?: unknown }).sprite === 'string'
+            ? (value as { sprite: string }).sprite
+            : '';
+    }
+  }
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(merged)) {
     out[key] = value.startsWith('#') ? (merged[value.slice(1)] ?? '') : value;
@@ -151,7 +172,10 @@ function whenMatches(when: unknown, props: Record<string, string>): boolean {
     const nested = (when as { OR?: unknown }).OR;
     return Array.isArray(nested) ? nested.some((w) => whenMatches(w, props)) : whenMatches(nested, props);
   }
-  return entries.every(([k, v]) => typeof v === 'string' && props[k] === v);
+  // Pipe alternation ("side|up") is vanilla OR within one property value.
+  return entries.every(([k, v]) =>
+    typeof v === 'string' && v.split('|').some((alt) => props[k] === alt),
+  );
 }
 
 /**

@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -17,6 +17,17 @@ function run(args: string[]): { status: number; output: string } {
 }
 
 describe('prepare-default-assets.sh', () => {
+  // The real operator set lives at DEST (the dev server serves it). Tests
+  // must never leave it deleted: back it up for the run, restore after.
+  const BACKUP = `${DEST}.before-tests`;
+  beforeAll(() => {
+    if (existsSync(DEST)) renameSync(DEST, BACKUP);
+  });
+  afterAll(() => {
+    rmSync(DEST, { recursive: true, force: true });
+    if (existsSync(BACKUP)) renameSync(BACKUP, DEST);
+  });
+
   it('fails cleanly without arguments', () => {
     const r = run([]);
     expect(r.status).not.toBe(0);

@@ -189,9 +189,13 @@ describe('resolveBlockstate', () => {
     expect(r!.faces.px).toBe('minecraft:textures/block/hopper_outside.png');
   });
 
-  it('returns null for missing blockstate or broken parent chain', () => {
+  it('returns null for missing blockstate; missing parent is terminal, not fatal', () => {
     expect(resolveBlockstate('minecraft:not_a_block', FIXTURE)).toBeNull();
-    expect(resolveBlockstate('minecraft:broken', FIXTURE)).toBeNull();
+    // parent block/does_not_exist has no file: chain ends there, but the
+    // model's own textures still resolve (mirrors vanilla builtin/* parents).
+    const r = resolveBlockstate('minecraft:broken', FIXTURE);
+    expect(r).not.toBeNull();
+    expect(r!.texturePath).toBe('minecraft:textures/block/broken.png');
   });
 
   it('ignores dangling #refs and uses a lower-priority key instead', () => {
