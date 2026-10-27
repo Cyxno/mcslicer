@@ -50,6 +50,7 @@ import { resolveBlockstate } from '../textures/atlas.js';
 import { boxFaceUVs } from '../textures/faces.js';
 import { buildAtlas, type AtlasResult } from '../textures/loader.js';
 import { treeFromAssetFiles, type AssetFiles } from '../textures/assets.js';
+import { tintForBlock } from '../textures/tint.js';
 
 const BLOCK = new BoxGeometry(1, 1, 1);
 const DIM_FACTOR = 0.28;
@@ -388,8 +389,13 @@ export class Viewer {
         this.texturedGeoms.push(geom);
         typeGeometry.set(p, geom);
         typeToSlot.set(p, this.brightMats.length);
-        this.brightMats.push(new MeshLambertMaterial({ map: this.atlasTexture }));
-        this.dimMats.push(new MeshLambertMaterial({ map: this.atlasTexture, color: DIM_FACTOR }));
+        // Fixed biome tint (plains) on grayscale-tinted types; white keeps
+        // the raw texture. Dimming multiplies the same tint.
+        const tint = tintForBlock(block);
+        this.brightMats.push(new MeshLambertMaterial({ map: this.atlasTexture, color: tint ?? 0xffffff }));
+        this.dimMats.push(
+          new MeshLambertMaterial({ map: this.atlasTexture, color: new Color(tint ?? 0xffffff).multiplyScalar(DIM_FACTOR) }),
+        );
         texturedTypes++;
       } else {
         const bright = new MeshLambertMaterial({ color });
