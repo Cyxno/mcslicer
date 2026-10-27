@@ -51,6 +51,7 @@ import {
   type SlicerModel,
   type SlicerState,
 } from '../slicer/steps.js';
+import { layerOpacity } from '../slicer/layer-opacity.js';
 import { baseTypeName, materialTable, sortRows, type MaterialRow, type SortDir, type SortKey } from '../slicer/materials.js';
 import { colorForBlock } from '../render/colors.js';
 import { blockCenterLocal, fitScale, modelMatrix, worldToBlock } from '../render/transform.js';
@@ -64,13 +65,14 @@ import { chooseSource, resolveForRender, atlasReportLine, sourceStatusLine, type
 import { pendingPaths, treeFromRemote, createRemoteSource, wantedPathsForPalette, type RemoteSource } from '../textures/remote.js';
 
 const BLOCK = new BoxGeometry(1, 1, 1);
-const DIM_FACTOR = 0.28;
 
 interface SliceMesh {
   mesh: InstancedMesh;
   sliceCoord: number;
   typeIndex: number;
   paletteIndex: number;
+  /** Untinted base color of this type; dim factors multiply onto the mesh's own material. */
+  base: Color;
 }
 
 interface Pick {
@@ -95,7 +97,6 @@ export class Viewer {
   private meshes: InstancedMesh[] = [];
   private sliceMeshes: SliceMesh[] = [];
   private brightMats: MeshLambertMaterial[] = [];
-  private dimMats: MeshLambertMaterial[] = [];
   /** Geometries cloned per textured type; disposed with the model. */
   private texturedGeoms: BufferGeometry[] = [];
   /** Subtle ground grid under the model (Shulkr-style), rebuilt per model. */
@@ -239,6 +240,7 @@ export class Viewer {
   private clearModel(): void {
     for (const mesh of [...this.meshes, ...this.sliceMeshes.map((s) => s.mesh)]) {
       this.scene.remove(mesh);
+      (mesh.material as MeshLambertMaterial).dispose(); // per-mesh clone (4e B3)
       mesh.dispose();
     }
     for (const geom of this.texturedGeoms) geom.dispose();
@@ -250,7 +252,6 @@ export class Viewer {
     this.meshes = [];
     this.sliceMeshes = [];
     this.brightMats = [];
-    this.dimMats = [];
     this.texturedGeoms = [];
   }
 
@@ -532,26 +533,23 @@ export class Viewer {
         typeGeometry.set(p, geom);
         typeToSlot.set(p, this.brightMats.length);
         // Fixed biome tint (plains) on grayscale-tinted types; white keeps
-        // the raw texture. Dimming multiplies the same tint.
+        // the raw texture. Dimming multiplies the same tint per layer.
         const tint = tintForBlock(block);
         this.brightMats.push(new MeshLambertMaterial({ map: this.atlasTexture, color: tint ?? 0xffffff }));
-        this.dimMats.push(
-          new MeshLambertMaterial({ map: this.atlasTexture, color: new Color(tint ?? 0xffffff).multiplyScalar(DIM_FACTOR) }),
-        );
       } else {
-        const bright = new MeshLambertMaterial({ color });
-        const dimColor = new Color(color).multiplyScalar(DIM_FACTOR);
-        const dim = new MeshLambertMaterial({ color: dimColor });
         typeToSlot.set(p, this.brightMats.length);
-        this.brightMats.push(bright);
-        this.dimMats.push(dim);
+        this.brightMats.push(new MeshLambertMaterial({ color }));
       }
     }
 
     const placement = new Matrix4();
     for (const g of groups.values()) {
       const geom = typeGeometry.get(g.typeIndex) ?? BLOCK;
-      const mesh = new InstancedMesh(geom, this.dimMats[typeToSlot.get(g.typeIndex)!]!, g.coords.length);
+      // Per-mesh material cloned from the FULL-bright template; the depth
+      // gradient (4e B3) multiplies a per-layer factor onto it instead of
+      // sharing two fixed bright/dim materials per type.
+      const template = this.brightMats[typeToSlot.get(g.typeIndex)!]!;
+      const mesh = new InstancedMesh(geom, template.clone(), g.coords.length);
       for (let i = 0; i < g.coords.length; i++) {
         const c = g.coords[i]!;
         placement.makeTranslation(c[0]!, c[1]!, c[2]!);
@@ -559,7 +557,10 @@ export class Viewer {
       }
       mesh.applyMatrix4(group);
       this.scene.add(mesh);
-      this.sliceMeshes.push({ mesh, sliceCoord: g.sliceCoord, typeIndex: typeToSlot.get(g.typeIndex)!, paletteIndex: g.typeIndex });
+      this.sliceMeshes.push({
+        mesh, sliceCoord: g.sliceCoord, typeIndex: typeToSlot.get(g.typeIndex)!,
+        paletteIndex: g.typeIndex, base: template.color.clone(),
+      });
     }
 
     const slices = this.model.slices;
@@ -692,17 +693,22 @@ export class Viewer {
     return this.lastTextureReport || 'geen textures geladen — wijs assets aan in Instellingen';
   }
 
-  /** Bright for the active slice or the highlighted type; hidden = off.
-   * Visibility follows the slice mode: cumulative shows layers up to the
-   * current one (build use), isolate shows only the current layer. */
+  /** Active slice full, deeper layers follow the depth gradient; a
+   * highlighted type is full across all layers; hidden = off. Visibility
+   * follows the slice mode: cumulative shows layers up to the current one
+   * (build use), isolate shows only the current layer. In isolate mode the
+   * active layer gets a subtle emissive lift so it stands out from the
+   * dimmed rest without a harsh cut. */
   private applyTypeMaterials(): void {
     for (const entry of this.sliceMeshes) {
       const hidden = this.hiddenTypes.has(entry.paletteIndex);
       entry.mesh.visible = !hidden && sliceVisible(entry.sliceCoord, this.sliceCoord, this.sliceMode);
-      const bright = entry.sliceCoord === this.sliceCoord || entry.paletteIndex === this.highlightedType;
-      entry.mesh.material = bright
-        ? this.brightMats[entry.typeIndex]!
-        : this.dimMats[entry.typeIndex]!;
+      const active = entry.sliceCoord === this.sliceCoord;
+      const highlighted = entry.paletteIndex === this.highlightedType;
+      const factor = active || highlighted ? 1 : layerOpacity(this.sliceCoord - entry.sliceCoord, this.sliceMode);
+      const mat = entry.mesh.material as MeshLambertMaterial;
+      mat.color.copy(entry.base).multiplyScalar(factor);
+      mat.emissive.setHex(this.sliceMode === 'isolate' && active && !highlighted ? 0x1a1a1a : 0x000000);
     }
   }
 
