@@ -40,6 +40,7 @@ import type { Schematic } from '../schem/types.js';
 import {
   buildSlicerModel,
   currentSlice,
+  currentStep,
   initialState,
   jumpTo,
   nextStep,
@@ -54,6 +55,7 @@ import {
 import { layerOpacity } from '../slicer/layer-opacity.js';
 import { baseTypeName, materialTable, sortRows, type MaterialRow, type SortDir, type SortKey } from '../slicer/materials.js';
 import { colorForBlock } from '../render/colors.js';
+import { framingForStep } from '../render/framing.js';
 import { blockCenterLocal, fitScale, modelMatrix, worldToBlock } from '../render/transform.js';
 import { blockInfo, pointerToNdc, toggleValue } from '../render/picking.js';
 import { resolveBlockstate } from '../textures/atlas.js';
@@ -130,6 +132,7 @@ export class Viewer {
   /** Overlays (hover, step marker, grid) in model space, under one transform. */
   private readonly modelGroup = new Group();
   private readonly hoverBox: Mesh;
+  private readonly stepMarker: Mesh;
   private typeToSlot = new Map<number, number>();
   private totals = new Map<number, number>();
   private hiddenTypes = new Set<number>();
@@ -138,6 +141,11 @@ export class Viewer {
   private pointerDownAt: { x: number; y: number } | null = null;
   private lastLabel = '';
   private measureMode = false;
+  /** "Volg stap" (4e C): glide the camera to frame the current step. */
+  private followStep = false;
+  private camAnim: {
+    fromT: Vector3; toT: Vector3; fromP: Vector3; toP: Vector3; start: number;
+  } | null = null;
 
   constructor(canvas: HTMLCanvasElement, els: {
     status: HTMLElement;
@@ -184,6 +192,15 @@ export class Viewer {
     this.hoverBox.visible = false;
     this.modelGroup.add(this.hoverBox);
 
+    // Current-step marker (4e C): amber shell in the same model-space
+    // style as the hover box, distinct color so the step stands out.
+    this.stepMarker = new Mesh(
+      new BoxGeometry(1, 1, 1),
+      new MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.32, depthWrite: false }),
+    );
+    this.stepMarker.visible = false;
+    this.modelGroup.add(this.stepMarker);
+
     canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
     // Leaving the canvas must never leave a stale hover box behind (the 4d
     // "losse grijze blok" report): hide it as soon as the pointer is gone.
@@ -205,11 +222,60 @@ export class Viewer {
     window.addEventListener('resize', () => this.resize());
 
     const loop = (): void => {
-      this.controls.update();
+      if (this.camAnim) {
+        // Follow-step glide (4e C): shift camera and target by the same
+        // delta so zoom and orbit orientation are preserved.
+        const a = this.camAnim;
+        const t = Math.min((performance.now() - a.start) / 260, 1);
+        const e = t * t * (3 - 2 * t); // smoothstep ease
+        this.controls.target.lerpVectors(a.fromT, a.toT, e);
+        this.camera.position.lerpVectors(a.fromP, a.toP, e);
+        this.camera.lookAt(this.controls.target);
+        if (t >= 1) {
+          this.camAnim = null;
+          this.controls.update();
+        }
+      } else {
+        this.controls.update();
+      }
       this.renderer.render(this.scene, this.camera);
       requestAnimationFrame(loop);
     };
     loop();
+  }
+
+  /** Start a short eased glide of camera+target towards a new framing. */
+  private glideTo(target: Vector3): void {
+    const delta = target.clone().sub(this.controls.target);
+    if (delta.lengthSq() < 1e-10) return;
+    this.camAnim = {
+      fromT: this.controls.target.clone(),
+      toT: target,
+      fromP: this.camera.position.clone(),
+      toP: this.camera.position.clone().add(delta),
+      start: performance.now(),
+    };
+  }
+
+  /** Toggle "volg stap"; enabling frames the current step immediately. */
+  setFollowStep(on: boolean): void {
+    this.followStep = on;
+    if (on && this.model && this.model.total > 0 && this.schem) {
+      const step = this.model.steps[this.state.step];
+      if (step) this.glideTo(this.stepFraming(step));
+    }
+  }
+
+  private stepFraming(step: { x: number; y: number; z: number }): Vector3 {
+    if (!this.schem) return new Vector3();
+    const f = framingForStep(step, this.schem.size);
+    return new Vector3(f.x, f.y, f.z);
+  }
+
+  /** Place the amber current-step marker on the given step. */
+  private updateStepMarker(step: { x: number; y: number; z: number }): void {
+    this.stepMarker.position.copy(blockCenterLocal(step));
+    this.stepMarker.visible = true;
   }
 
   private resize(): void {
@@ -253,6 +319,7 @@ export class Viewer {
     this.sliceMeshes = [];
     this.brightMats = [];
     this.texturedGeoms = [];
+    this.stepMarker.visible = false;
   }
 
   /**
@@ -870,6 +937,13 @@ export class Viewer {
     this.state = jumpTo(this.model, this.state, step);
     const slice = currentSlice(this.model, this.state);
     if (slice && slice.coord !== this.sliceCoord) this.setSliceCoord(slice.coord);
+    const cur = currentStep(this.model, this.state);
+    if (cur) {
+      this.updateStepMarker(cur);
+      if (this.followStep) this.glideTo(this.stepFraming(cur));
+    } else {
+      this.stepMarker.visible = false;
+    }
     this.progress.textContent = progressLabel(this.model, this.state);
     this.refreshMaterials();
   }
@@ -1033,6 +1107,13 @@ export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, dem
   });
   // Slice semantics: cumulative (default, build use) vs isolate (default off).
   $('btn-slice-mode')?.addEventListener('click', () => viewer.toggleSliceMode());
+  // Follow-step camera: glide to the current step's framing while stepping.
+  $('btn-follow')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget as HTMLElement;
+    const on = !btn.classList.contains('active');
+    btn.classList.toggle('active', on);
+    viewer.setFollowStep(on);
+  });
   $('btn-fullscreen')?.addEventListener('click', () => {
     if (document.fullscreenElement) void document.exitFullscreen();
     else void document.getElementById('app')?.requestFullscreen();
