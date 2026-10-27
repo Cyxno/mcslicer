@@ -29,7 +29,12 @@ Parse and rendering run entirely in the browser: **schematic files are never upl
   - Corrupt/truncated input always yields a typed `SchemParseError`, never a crash
   - Fixture `tests/fixtures/demo-huisje.schem` (20×10×20 house: walls, windows, door, gabled roof)
 - [x] **Phase 2 — 3D viewer** (drag-drop a `.schem` or use the demo button; one InstancedMesh per block type, orthographic orbit camera, colors from `src/render/colors.ts`, unknown blocks get a deterministic fallback color)
-- [ ] Phase 3 — slicer mode
+- [x] **Phase 3 — slicer mode** (Shulkr-parity: axis picker X/Y/Z, layer slider
+  with PgUp/PgDn + slider-arrow keys, step navigation ←/→ and buttons,
+  Home/End; current layer isolated by *dimming* the other layers — chosen over
+  hiding so the build stays spatially navigable; material panel with total +
+  per-layer counts, sortable, zeros hidden as "–"; keyboard hints always
+  visible in the hint bar)
 - [ ] Phase 4 — user textures
 
 ## Node globals in the browser (polyfills)

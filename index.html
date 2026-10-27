@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="nl">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,30 +7,105 @@
     <style>
       :root { color-scheme: dark; }
       html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
-      #app { display: flex; flex-direction: column; height: 100%; }
+      #app { display: grid; grid-template-rows: auto auto 1fr auto; grid-template-columns: 1fr 280px; height: 100%; }
       #toolbar {
-        display: flex; gap: 12px; align-items: center;
-        padding: 8px 12px; background: #12141a; color: #cfd4dc;
+        grid-column: 1 / 3; display: flex; gap: 10px; align-items: center;
+        padding: 8px 12px; background: #12141a; color: #cfd4dc; flex-wrap: wrap;
       }
       #demo-btn {
         background: #2d6cdf; color: white; border: 0; border-radius: 6px;
         padding: 6px 14px; cursor: pointer; font-size: 14px;
       }
       #demo-btn:hover { background: #3a7bee; }
+      .axis-btn {
+        background: #23262e; color: #9aa3af; border: 1px solid #333845; border-radius: 6px;
+        padding: 5px 12px; cursor: pointer; font-size: 13px; font-weight: 600;
+      }
+      .axis-btn.active { background: #2d6cdf; color: white; border-color: #2d6cdf; }
+      #slice-slider { flex: 1; min-width: 160px; accent-color: #2d6cdf; }
       #status { font-size: 13px; color: #9aa3af; }
       #status.error { color: #ff6b6b; font-weight: 600; }
-      #canvas-wrap { flex: 1; min-height: 0; }
+      #slicerbar {
+        grid-column: 1 / 3; display: flex; gap: 8px; align-items: center;
+        padding: 6px 12px; background: #171a21; color: #cfd4dc; flex-wrap: wrap;
+      }
+      .nav-btn {
+        background: #23262e; color: #cfd4dc; border: 1px solid #333845; border-radius: 6px;
+        padding: 4px 12px; cursor: pointer; font-size: 14px; min-width: 34px;
+      }
+      .nav-btn:hover { background: #2d6cdf; }
+      #progress { font-size: 13px; color: #cfd4dc; font-variant-numeric: tabular-nums; }
+      #hints {
+        grid-column: 1 / 3; padding: 5px 12px; background: #101218; color: #6b7480;
+        font-size: 12px; white-space: nowrap; overflow-x: auto;
+      }
+      #hints kbd {
+        background: #23262e; border: 1px solid #333845; border-radius: 4px;
+        padding: 1px 5px; font-size: 11px; color: #9aa3af;
+      }
+      #canvas-wrap { grid-row: 3; grid-column: 1; min-height: 0; }
       canvas { width: 100%; height: 100%; display: block; outline: none; }
+      #panel {
+        grid-row: 3; grid-column: 2; background: #12141a; color: #cfd4dc;
+        overflow-y: auto; padding: 10px; font-size: 13px; border-left: 1px solid #23262e;
+      }
+      #panel h2 { margin: 2px 0 8px; font-size: 13px; color: #9aa3af; text-transform: uppercase; letter-spacing: .05em; }
+      #materials { width: 100%; border-collapse: collapse; }
+      #materials th {
+        text-align: left; cursor: pointer; color: #9aa3af; font-weight: 600;
+        border-bottom: 1px solid #23262e; padding: 4px 6px; user-select: none;
+      }
+      #materials th:hover { color: #cfd4dc; }
+      #materials th.num, #materials td.num { text-align: right; font-variant-numeric: tabular-nums; }
+      #materials td { padding: 3px 6px; border-bottom: 1px solid #1a1d25; }
+      #materials td.swatch { width: 14px; }
+      #materials .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; }
+      #materials .zero { color: #4a525c; }
+      #materials .blockname { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     </style>
   </head>
   <body>
     <div id="app">
       <div id="toolbar">
-        <button id="demo-btn">Load demo house</button>
+        <button id="demo-btn">Demo huisje</button>
+        <span id="axis-group">
+          <button class="axis-btn" data-axis="x">X</button>
+          <button class="axis-btn active" data-axis="y">Y</button>
+          <button class="axis-btn" data-axis="z">Z</button>
+        </span>
+        <input id="slice-slider" type="range" min="0" max="0" value="0" step="1" />
         <span id="status"></span>
+      </div>
+      <div id="slicerbar">
+        <button class="nav-btn" id="first-btn" title="Eerste stap (Home)">⏮</button>
+        <button class="nav-btn" id="prev-btn" title="Vorige stap (←)">◀</button>
+        <button class="nav-btn" id="next-btn" title="Volgende stap (→)">▶</button>
+        <button class="nav-btn" id="last-btn" title="Laatste stap (End)">⏭</button>
+        <span id="progress"></span>
+      </div>
+      <div id="hints">
+        <kbd>←</kbd>/<kbd>→</kbd> vorige/volgende stap ·
+        <kbd>PgUp</kbd>/<kbd>PgDn</kbd> laag omhoog/omlaag ·
+        <kbd>Home</kbd>/<kbd>End</kbd> eerste/laatste stap ·
+        <kbd>←</kbd>/<kbd>→</kbd> op de slider = laag ·
+        muis-slepen = orbit, scroll = zoom · sleep een <kbd>.schem</kbd> op het canvas
       </div>
       <div id="canvas-wrap">
         <canvas id="viewer"></canvas>
+      </div>
+      <div id="panel">
+        <h2>Materialen <span id="mat-slice-label"></span></h2>
+        <table id="materials">
+          <thead>
+            <tr>
+              <th></th>
+              <th data-sort="block">Type ⇅</th>
+              <th class="num" data-sort="total">Totaal ⇅</th>
+              <th class="num" data-sort="inSlice">Laag ⇅</th>
+            </tr>
+          </thead>
+          <tbody id="materials-body"></tbody>
+        </table>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

@@ -119,6 +119,12 @@ const outPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'tests', 'fi
 mkdirSync(dirname(outPath), { recursive: true });
 writeFileSync(outPath, gzipped);
 
+// Keep the bundled demo asset in sync — single source of truth (the viewer's
+// demo button fetches src/assets/demo-huisje.schem via Vite ?url).
+const assetPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'assets', 'demo-huisje.schem');
+mkdirSync(dirname(assetPath), { recursive: true });
+writeFileSync(assetPath, gzipped);
+
 const nonAir = blocks.filter((v) => paletteEntries[v] !== AIR).length;
 console.log(`wrote ${outPath}`);
 console.log(`size ${W}x${H}x${L}, ${blocks.length} blocks total, ${nonAir} non-air, ${Buffer.byteLength(gzipped)} bytes gzipped`);
