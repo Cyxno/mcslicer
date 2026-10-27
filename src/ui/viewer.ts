@@ -20,7 +20,7 @@ import {
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { parseSchem } from '../schem/parse.js';
-import { SchemParseError, type Schematic } from '../schem/types.js';
+import type { Schematic } from '../schem/types.js';
 import { schemToSceneData } from '../render/scene.js';
 
 const BLOCK = new BoxGeometry(1, 1, 1);
@@ -147,9 +147,28 @@ export class Viewer {
       this.showSchematic(schem);
     } catch (err) {
       this.clearModel();
-      const detail = err instanceof SchemParseError ? err.message : 'unknown error';
-      this.setStatus(`Could not load ${label}: ${detail}`, true);
+      this.showError(err, label);
     }
+  }
+
+  /** Fetch the demo asset and display; fetch failures are visible too. */
+  async loadDemo(url: string, label: string): Promise<void> {
+    this.setStatus(`Loading ${label}…`);
+    try {
+      const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
+      await this.loadFile(bytes, label);
+    } catch (err) {
+      this.clearModel();
+      this.showError(err, label);
+    }
+  }
+
+  private showError(err: unknown, label: string): void {
+    const detail =
+      err instanceof Error
+        ? `${err.name}: ${err.message}`
+        : String(err);
+    this.setStatus(`Could not load ${label}: ${detail}`, true);
   }
 }
 
@@ -168,10 +187,10 @@ export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, dem
 
   const demoButton = document.getElementById('demo-btn');
   if (demoButton && demoUrl) {
-    demoButton.addEventListener('click', async () => {
-      // Fetches the app's own bundled asset — no external/server API involved.
-      const bytes = new Uint8Array(await (await fetch(demoUrl)).arrayBuffer());
-      viewer.loadFile(bytes, 'demo-huisje.schem');
+    demoButton.addEventListener('click', () => {
+      // demoUrl comes from the Vite ?url import: an http path in dev, a
+      // hashed asset URL in build. Never a file:// or absolute FS path.
+      viewer.loadDemo(demoUrl, 'demo-huisje.schem');
     });
   }
 
