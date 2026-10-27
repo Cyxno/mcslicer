@@ -56,7 +56,7 @@ import { layerOpacity } from '../slicer/layer-opacity.js';
 import { baseTypeName, materialTable, sortRows, type MaterialRow, type SortDir, type SortKey } from '../slicer/materials.js';
 import { colorForBlock } from '../render/colors.js';
 import { framingForStep } from '../render/framing.js';
-import { blockCenterLocal, fitScale, modelMatrix, worldToBlock } from '../render/transform.js';
+import { blockCenterLocal, fitScale, gridSpan, modelMatrix, worldToBlock } from '../render/transform.js';
 import { blockInfo, pointerToNdc, toggleValue } from '../render/picking.js';
 import { resolveBlockstate } from '../textures/atlas.js';
 import { boxFaceUVs } from '../textures/faces.js';
@@ -311,7 +311,7 @@ export class Viewer {
     }
     for (const geom of this.texturedGeoms) geom.dispose();
     if (this.grid) {
-      this.scene.remove(this.grid);
+      this.modelGroup.remove(this.grid);
       this.grid.dispose();
       this.grid = null;
     }
@@ -540,13 +540,15 @@ export class Viewer {
     this.groupTransform = group.clone();
     this.modelGroup.matrix.copy(group);
 
-    // Subtle ground grid under the build; 8-block cells, snapped to a
-    // multiple of the cell so the grid extends evenly around the model.
+    // Subtle ground grid under the build (4e D audit fix): parented under
+    // the model transform so its 8-block cells stay block-sized at any fit
+    // scale — it used to live in world space with a block-unit span, so
+    // cells grew/shrank with the model (same bug class as the hover box).
     const cell = 8;
-    const span = Math.ceil(Math.max(schem.size.x, schem.size.z) / cell) * cell + cell * 2;
+    const span = gridSpan(schem.size.x, schem.size.z, cell);
     this.grid = new GridHelper(span, span / cell, 0x2a2f3a, 0x1f242e);
     this.grid.position.y = -0.01;
-    this.scene.add(this.grid);
+    this.modelGroup.add(this.grid);
 
     // Group steps by (slice, type); one InstancedMesh per group.
     const groups = new Map<string, { typeIndex: number; sliceCoord: number; coords: number[][] }>();
