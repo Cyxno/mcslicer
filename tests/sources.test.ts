@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chooseSource, resolveSourceOrder, sourceLabel, sourceStatusLine } from '../src/textures/sources.js';
+import { atlasReportLine, chooseSource, resolveForRender, resolveSourceOrder, sourceLabel, sourceStatusLine } from '../src/textures/sources.js';
 import { createRemoteSource, pendingPaths, treeFromRemote } from '../src/textures/remote.js';
 import { resolveBlockstate } from '../src/textures/atlas.js';
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
@@ -105,5 +105,38 @@ describe('remote default source', () => {
     expect(source.getBytes('minecraft/missing.json')).toBeUndefined();
     expect(source.cached()).toBe(0);
     expect(treeFromRemote(source).size).toBe(0);
+  });
+});
+
+describe('resolveForRender (4d: status en meshes zelfde bronvolgorde)', () => {
+  const user = new Map(Object.entries({
+    'minecraft/blockstates/stone.json': { variants: { '': { model: 'block/stone' } } },
+    'minecraft/models/block/stone.json': { textures: { all: 'block/stone' } },
+    'minecraft:textures/block/stone.png': {},
+  }));
+  const def = new Map(Object.entries({
+    'minecraft/blockstates/stone.json': { variants: { '': { model: 'block/stone' } } },
+    'minecraft/models/block/stone.json': { textures: { all: 'block/otherstone' } },
+    'minecraft:textures/block/otherstone.png': {},
+  }));
+
+  it('user wint van default', () => {
+    const r = resolveForRender('minecraft:stone', user, def);
+    expect(r?.texturePath).toBe('minecraft:textures/block/stone.png');
+  });
+
+  it('default vangt op wanneer user niet resolveert (de 4d-bug)', () => {
+    const r = resolveForRender('minecraft:stone', null, def);
+    expect(r?.texturePath).toBe('minecraft:textures/block/otherstone.png');
+  });
+
+  it('null wanneer geen enkele bron compleet resolveert', () => {
+    expect(resolveForRender('minecraft:stone', null, null)).toBeNull();
+    expect(resolveForRender('minecraft:cactus', user, def)).toBeNull();
+  });
+
+  it('atlasReportLine: geen split = render pending', () => {
+    expect(atlasReportLine(null, 34)).toBe('34 types resolvet, render pending');
+    expect(atlasReportLine('34 types (default assets)', 34)).toBe('34 types (default assets)');
   });
 });

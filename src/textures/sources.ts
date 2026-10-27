@@ -6,6 +6,7 @@
  * supplied by the instance operator via scripts/prepare-default-assets.sh
  * and never ships with the repo.
  */
+import { resolveBlockstate, type AssetsTree, type ResolvedBlock } from './atlas.js';
 
 export type TextureSourceKind = 'user' | 'default' | 'fallback';
 
@@ -22,6 +23,30 @@ export function chooseSource(userUsable: boolean, defaultUsable: boolean): Textu
   if (userUsable) return 'user';
   if (defaultUsable) return 'default';
   return 'fallback';
+}
+
+/**
+ * Resolve one palette entry for rendering, in source order: user assets
+ * first, then the default set; null when neither resolves completely.
+ * This is the single resolution used by BOTH the status counts and mesh
+ * building, so the two can never disagree (the 4d bug: the status counted
+ * against the default tree while meshes resolved against user assets
+ * only — default-only setups rendered all color while claiming textures).
+ */
+export function resolveForRender(
+  block: string,
+  userTree: AssetsTree | null,
+  defaultTree: AssetsTree | null,
+): ResolvedBlock | null {
+  if (userTree) {
+    const r = resolveBlockstate(block, userTree);
+    if (r && !r.incomplete && r.texturePath) return r;
+  }
+  if (defaultTree) {
+    const r = resolveBlockstate(block, defaultTree);
+    if (r && !r.incomplete && r.texturePath) return r;
+  }
+  return null;
 }
 
 const KIND_LABELS: Record<TextureSourceKind, string> = {
@@ -47,3 +72,13 @@ export function sourceStatusLine(counts: Record<TextureSourceKind, number>): str
   if (parts.length === 0) return 'kleurmodus (geen textures beschikbaar)';
   return parts.join(', ');
 }
+
+/**
+ * Status line for the atlas-report slot. When the atlas is actually bound
+ * the per-source split is shown; when resolution succeeded but the atlas
+ * could not be built yet, say so instead of claiming textured rendering.
+ */
+export function atlasReportLine(split: string | null, resolvedTypes: number): string {
+  return split ?? `${resolvedTypes} types resolvet, render pending`;
+}
+

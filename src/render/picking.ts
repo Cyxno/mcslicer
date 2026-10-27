@@ -47,6 +47,28 @@ export function toggleValue<T>(set: ReadonlySet<T>, value: T): { next: Set<T>; p
   return { next, present: next.has(value) };
 }
 
+/**
+ * Pointer event (client CSS pixels) → normalized device coordinates
+ * [-1, 1] for Raycaster.setFromCamera. `dpr` is the renderer pixelRatio:
+ * event and rect both live in CSS pixels, so the drawingbuffer scale
+ * cancels — the explicit parameter documents and tests that invariance
+ * (dpr != 1 must give identical NDC, never an offset).
+ */
+export function pointerToNdc(
+  clientX: number,
+  clientY: number,
+  rect: { left: number; top: number; width: number; height: number },
+  dpr = 1,
+): { x: number; y: number } {
+  // Compute in drawingbuffer pixels (client * dpr) so DPR-independence is
+  // explicit rather than accidental.
+  const px = (clientX - rect.left) * dpr;
+  const py = (clientY - rect.top) * dpr;
+  const w = Math.max(rect.width * dpr, 1);
+  const h = Math.max(rect.height * dpr, 1);
+  return { x: (px / w) * 2 - 1, y: -(py / h) * 2 + 1 };
+}
+
 /** Flat block index → schematic coordinates (Sponge yzx order). */
 export function flatToCoords(
   flat: number,

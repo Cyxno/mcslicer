@@ -13,6 +13,19 @@ export type SortKey = 'total' | 'block' | 'inSlice';
 export type SortDir = 'desc' | 'asc';
 
 /**
+ * Display name for the material list: the base block type without state
+ * properties and without namespace. "minecraft:redstone_wire[east=side,…]"
+ * → "redstone_wire". The full blockstate stays available in the info
+ * panel after clicking an instance.
+ */
+export function baseTypeName(block: string): string {
+  const bracket = block.indexOf('[');
+  const id = bracket === -1 ? block : block.slice(0, bracket);
+  const colon = id.indexOf(':');
+  return colon === -1 ? id : id.slice(colon + 1);
+}
+
+/**
  * Per-type counts: whole schematic plus the currently visible slice.
  * Types with total 0 do not exist by construction; rows are returned
  * unsorted except for a stable base order (palette index).

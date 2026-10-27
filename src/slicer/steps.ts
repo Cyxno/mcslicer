@@ -128,3 +128,15 @@ export function progressLabel(model: SlicerModel, state: SlicerState): string {
   const axisName = model.axis;
   return `stap ${state.step + 1} van ${model.total} (laag ${axisName}=${slice?.coord})`;
 }
+
+/**
+ * Slice display semantics. "cumulative" (default, build use) shows
+ * everything up to and including the current layer — the build as it
+ * stands at that height; "isolate" shows only the current layer.
+ */
+export type SliceMode = 'cumulative' | 'isolate';
+
+export function sliceVisible(sliceCoord: number, current: number, mode: SliceMode): boolean {
+  if (current < 0) return true; // no slice chosen yet: show the whole build
+  return mode === 'isolate' ? sliceCoord === current : sliceCoord <= current;
+}

@@ -44,19 +44,21 @@ import {
   nextStep,
   prevStep,
   progressLabel,
+  sliceVisible,
   type Axis,
+  type SliceMode,
   type SlicerModel,
   type SlicerState,
 } from '../slicer/steps.js';
-import { materialTable, sortRows, type MaterialRow, type SortDir, type SortKey } from '../slicer/materials.js';
+import { baseTypeName, materialTable, sortRows, type MaterialRow, type SortDir, type SortKey } from '../slicer/materials.js';
 import { colorForBlock } from '../render/colors.js';
-import { blockInfo, toggleValue } from '../render/picking.js';
+import { blockInfo, pointerToNdc, toggleValue } from '../render/picking.js';
 import { resolveBlockstate } from '../textures/atlas.js';
 import { boxFaceUVs } from '../textures/faces.js';
 import { buildAtlas, type AtlasResult } from '../textures/loader.js';
 import { treeFromAssetFiles, type AssetFiles } from '../textures/assets.js';
 import { tintForBlock } from '../textures/tint.js';
-import { chooseSource, sourceStatusLine, type TextureSourceKind } from '../textures/sources.js';
+import { chooseSource, resolveForRender, atlasReportLine, sourceStatusLine, type TextureSourceKind } from '../textures/sources.js';
 import { pendingPaths, treeFromRemote, createRemoteSource, wantedPathsForPalette, type RemoteSource } from '../textures/remote.js';
 
 const BLOCK = new BoxGeometry(1, 1, 1);
@@ -114,6 +116,7 @@ export class Viewer {
   private model: SlicerModel | null = null;
   private state: SlicerState = initialState();
   private sliceCoord = -1;
+  private sliceMode: SliceMode = 'cumulative';
   private sortKey: SortKey = 'total';
   private sortDir: SortDir = 'desc';
 
@@ -173,6 +176,11 @@ export class Viewer {
     this.scene.add(this.hoverBox);
 
     canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
+    // Leaving the canvas must never leave a stale hover box behind (the 4d
+    // "losse grijze blok" report): hide it as soon as the pointer is gone.
+    canvas.addEventListener('pointerleave', () => {
+      this.hoverBox.visible = false;
+    });
     canvas.addEventListener('pointerdown', (e) => {
       this.pointerDownAt = { x: e.clientX, y: e.clientY };
     });
@@ -338,7 +346,11 @@ export class Viewer {
       this.atlasPaletteKey = key;
     }
     counts.fallback += unresolvedCount;
-    this.lastTextureReport = sourceStatusLine(counts);
+    // Never claim textured rendering without a bound atlas: when the atlas
+    // failed to build, say resolution succeeded but rendering is pending.
+    this.lastTextureReport = this.atlas
+      ? sourceStatusLine(counts)
+      : atlasReportLine(null, counts.user + counts.default);
   }
 
   /** User assets resolve this entry completely (textures present)? */
@@ -477,16 +489,20 @@ export class Viewer {
     // Build per-type material pairs once, in palette order. Types with a
     // resolvable texture get UV-mapped geometry against the shared atlas;
     // all other types keep color rendering (documented mix, README).
+    // resolveForRender applies the same source order (user > default) that
+    // ensureAtlas used for the atlas and the status split, so the meshes
+    // can never disagree with the reported texture state.
+    const dtree = this.defaultSource ? treeFromRemote(this.defaultSource) : null;
     const paletteIndices = [...typeColors.keys()].sort((a, b) => a - b);
     const typeToSlot = new Map<number, number>();
     this.typeToSlot = typeToSlot;
     const typeGeometry = new Map<number, BufferGeometry>();
-    
+
     for (const p of paletteIndices) {
       const block = schem.palette[p]!;
       const color = typeColors.get(p)!;
-      const resolved = this.assetTree && this.atlas && this.atlasTexture
-        ? resolveBlockstate(block, this.assetTree)
+      const resolved = this.atlas && this.atlasTexture
+        ? resolveForRender(block, this.assetTree, dtree)
         : null;
       const rects = resolved && this.atlas
         ? {
@@ -632,16 +648,38 @@ export class Viewer {
     return this.lastTextureReport || 'geen textures geladen — wijs assets aan in Instellingen';
   }
 
-  /** Bright for the active slice or the highlighted type; hidden = off. */
+  /** Bright for the active slice or the highlighted type; hidden = off.
+   * Visibility follows the slice mode: cumulative shows layers up to the
+   * current one (build use), isolate shows only the current layer. */
   private applyTypeMaterials(): void {
     for (const entry of this.sliceMeshes) {
       const hidden = this.hiddenTypes.has(entry.paletteIndex);
-      entry.mesh.visible = !hidden;
+      entry.mesh.visible = !hidden && sliceVisible(entry.sliceCoord, this.sliceCoord, this.sliceMode);
       const bright = entry.sliceCoord === this.sliceCoord || entry.paletteIndex === this.highlightedType;
       entry.mesh.material = bright
         ? this.brightMats[entry.typeIndex]!
         : this.dimMats[entry.typeIndex]!;
     }
+  }
+
+  /** Slice display semantics: "toon t/m laag N" vs "isoleer laag N". */
+  setSliceMode(mode: SliceMode): void {
+    this.sliceMode = mode;
+    this.applyTypeMaterials();
+    const btn = document.getElementById('btn-slice-mode');
+    if (btn) {
+      btn.textContent = mode === 'cumulative' ? 'Σ' : '1';
+      btn.title = mode === 'cumulative'
+        ? 'Laagweergave: cumulatief (toon t/m laag N) — klik om te isoleren'
+        : 'Laagweergave: isoleer laag N — klik voor cumulatief';
+      btn.classList.toggle('active', mode === 'isolate');
+    }
+    const label = document.getElementById('slice-mode-label');
+    if (label) label.textContent = mode === 'cumulative' ? 't/m laag' : 'isoleer laag';
+  }
+
+  toggleSliceMode(): void {
+    this.setSliceMode(this.sliceMode === 'cumulative' ? 'isolate' : 'cumulative');
   }
 
   /** Force one palette type bright across all slices (toggle). */
@@ -666,34 +704,42 @@ export class Viewer {
   private raycastAt(e: PointerEvent): { mesh: SliceMesh; point: Vector3 } | null {
     if (!this.schem) return null;
     const rect = this.renderer.domElement.getBoundingClientRect();
-    this.pointerNDC.set(
-      ((e.clientX - rect.left) / rect.width) * 2 - 1,
-      -((e.clientY - rect.top) / rect.height) * 2 + 1,
-    );
+    // NDC from CSS pixels; DPR-invariant (see pointerToNdc — the drawingbuffer
+    // scale cancels because event and rect share the CSS pixel space).
+    const ndc = pointerToNdc(e.clientX, e.clientY, rect, this.renderer.getPixelRatio());
+    this.pointerNDC.set(ndc.x, ndc.y);
     this.raycaster.setFromCamera(this.pointerNDC, this.camera);
     const meshes = this.sliceMeshes.filter((s) => s.mesh.visible).map((s) => s.mesh);
     const hits = this.raycaster.intersectObjects(meshes, false);
     const hit = hits[0];
     const sliceMesh = hit && this.sliceMeshes.find((s) => s.mesh === hit.object);
     if (!hit || !sliceMesh || hit.instanceId === undefined) return null;
-    const m = new Matrix4();
-    sliceMesh.mesh.getMatrixAt(hit.instanceId, m);
-    return { mesh: sliceMesh, point: new Vector3().setFromMatrixPosition(m) };
+    // hit.point is world-space (raycaster applies the mesh's group transform);
+    // the instance matrix alone is local block coordinates and would place the
+    // hover box outside the scaled model (the 4d "losse grijze blok").
+    return { mesh: sliceMesh, point: hit.point.clone() };
+  }
+
+  /** World-space point → schematic block coords (inverse group transform). */
+  private worldToBlock(p: Vector3): { x: number; y: number; z: number } {
+    const local = this.groupTransform
+      ? p.clone().applyMatrix4(this.groupTransform.clone().invert())
+      : p.clone();
+    return { x: Math.floor(local.x), y: Math.floor(local.y), z: Math.floor(local.z) };
   }
 
   private onPointerMove(e: PointerEvent): void {
     const hit = this.raycastAt(e);
     if (hit) {
+      // hoverBox lives in world space; hit.point already is.
       this.hoverBox.position.copy(hit.point);
       this.hoverBox.visible = true;
       if (this.measureMode) {
         const hud = document.getElementById('measure-hud');
         if (hud && this.schem) {
+          const c = this.worldToBlock(hit.point);
           const entry = this.schem.palette[hit.mesh.paletteIndex]!.split('[')[0]!;
-          const cx = Math.floor(hit.point.x);
-          const cy = Math.floor(hit.point.y);
-          const cz = Math.floor(hit.point.z);
-          hud.textContent = `${cx}, ${cy}, ${cz} · ${entry.replace('minecraft:', '')}`;
+          hud.textContent = `${c.x}, ${c.y}, ${c.z} · ${entry.replace('minecraft:', '')}`;
         }
       }
     } else {
@@ -713,11 +759,8 @@ export class Viewer {
       if (this.infoPanel) this.infoPanel.hidden = true;
       return;
     }
-    // Instance translations are block centers (x+0.5): floor to coords.
-    const cx = Math.floor(hit.point.x);
-    const cy = Math.floor(hit.point.y);
-    const cz = Math.floor(hit.point.z);
-    this.lastPick = { paletteIndex: hit.mesh.paletteIndex, x: cx, y: cy, z: cz };
+    const c = this.worldToBlock(hit.point);
+    this.lastPick = { paletteIndex: hit.mesh.paletteIndex, x: c.x, y: c.y, z: c.z };
     this.renderInfoPanel();
   }
 
@@ -825,9 +868,8 @@ export class Viewer {
       const inSlice = row.inSlice === 0
         ? '<span class="zero">–</span>'
         : String(row.inSlice);
-      const name = row.block.startsWith('minecraft:')
-        ? row.block.slice('minecraft:'.length)
-        : row.block;
+      // Material list shows the base type; full blockstate in the info panel.
+      const name = baseTypeName(row.block);
       const paletteIndex = this.schem!.palette.indexOf(row.block);
       const hidden = this.hiddenTypes.has(paletteIndex);
       const highlighted = this.highlightedType === paletteIndex;
@@ -935,6 +977,8 @@ export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, dem
     btn.classList.toggle('active', on);
     viewer.setMeasureMode(on);
   });
+  // Slice semantics: cumulative (default, build use) vs isolate (default off).
+  $('btn-slice-mode')?.addEventListener('click', () => viewer.toggleSliceMode());
   $('btn-fullscreen')?.addEventListener('click', () => {
     if (document.fullscreenElement) void document.exitFullscreen();
     else void document.getElementById('app')?.requestFullscreen();

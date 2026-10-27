@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blockInfo, flatToCoords, toggleValue } from '../src/render/picking.js';
+import { blockInfo, flatToCoords, pointerToNdc, toggleValue } from '../src/render/picking.js';
 
 describe('blockInfo', () => {
   it('splits name, properties, position and total', () => {
@@ -49,5 +49,33 @@ describe('flatToCoords', () => {
         }
       }
     }
+  });
+});
+
+describe('pointerToNdc', () => {
+  const rect = { left: 100, top: 50, width: 800, height: 600 };
+
+  it('maps corners to ±1', () => {
+    expect(pointerToNdc(100, 50, rect, 1)).toEqual({ x: -1, y: 1 }); // top-left
+    expect(pointerToNdc(900, 650, rect, 1)).toEqual({ x: 1, y: -1 }); // bottom-right
+    expect(pointerToNdc(500, 350, rect, 1)).toEqual({ x: 0, y: 0 }); // center
+  });
+
+  it('is DPR-invariant (dpr 1, 1.5, 2 give identical NDC)', () => {
+    const client = { x: 617.3, y: 211.7 };
+    const base = pointerToNdc(client.x, client.y, rect, 1);
+    for (const dpr of [1.5, 2, 3]) {
+      const scaled = pointerToNdc(client.x, client.y, rect, dpr);
+      expect(scaled.x).toBeCloseTo(base.x, 12);
+      expect(scaled.y).toBeCloseTo(base.y, 12);
+    }
+  });
+
+  it('clamps nothing but stays in range for in-canvas points', () => {
+    const ndc = pointerToNdc(150, 100, rect, 2);
+    expect(ndc.x).toBeGreaterThan(-1);
+    expect(ndc.x).toBeLessThan(1);
+    expect(ndc.y).toBeGreaterThan(-1);
+    expect(ndc.y).toBeLessThan(1);
   });
 });
