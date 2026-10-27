@@ -9,7 +9,7 @@ Parse and rendering run entirely in the browser: **schematic files are never upl
 - Open a `.schem` (Sponge v2/v3) by dropping it on the page.
 - Inspect it in 3D with orbit controls.
 - **Slicer mode**: step through the build layer by layer, one block per step — like Shulkr's build-along view.
-- Later: textures from user-supplied assets (resource packs), so no copyrighted textures ship with the app.
+- Textures come from **user-supplied assets** (resource packs), so no copyrighted textures ship with the app — see "Your own block textures" below.
 
 ## Non-goals per phase
 
@@ -35,7 +35,53 @@ Parse and rendering run entirely in the browser: **schematic files are never upl
   hiding so the build stays spatially navigable; material panel with total +
   per-layer counts, sortable, zeros hidden as "–"; keyboard hints always
   visible in the hint bar)
-- [ ] Phase 4 — user textures
+- [x] **Phase 4a — user textures** (see "Your own block textures" below;
+  blockstate→model→texture resolution, canvas atlas, UV rendering with
+  color fallback for unresolved types)
+
+## Your own block textures (phase 4a)
+
+mcslicer can render blocks with **real textures from your own Minecraft
+assets**. The vanilla assets are never shipped with this repo — you point
+the app at them yourself:
+
+- **"Textures: map…"** — pick a directory tree containing an `assets/`
+  root, e.g. `.minecraft/assets` (the unpacked client assets) or an
+  unpacked resource pack.
+- **"Textures: zip…"** — pick a resource pack or assets `.zip`.
+
+**Privacy model:** everything is read in the browser with the File API and
+stays in memory on your machine. **Nothing is uploaded, no network request
+is made** — the app has no server-side processing at all (that is a
+non-goal per phase table above).
+
+**How it works:**
+
+1. `src/textures/atlas.ts` (pure, unit-tested) resolves each palette entry
+   (`hopper[enabled=true,facing=north]`) through
+   `blockstates/<base>.json` → variant match → model JSON → parent chain →
+   `#ref` texture resolution, producing a texture path per cube face.
+   `grass_block[snowy=false]` resolves its top face to
+   `grass_block_top` (exact test).
+2. `src/textures/loader.ts` decodes the referenced PNGs onto one canvas
+   atlas (nearest-neighbour, half-texel inset) and returns UV rects.
+3. The viewer gives textured types per-face UV-mapped geometry against the
+   atlas; **types without a resolvable texture keep the existing color
+   rendering** (`src/render/colors.ts`, deterministic hash fallback). Both
+   material kinds intentionally mix in one scene — textured and
+   color-rendered blocks coexist; the status bar reports how many types
+   resolved and how many fell back.
+
+**Fallback behaviour (never silent):** missing blockstates, unmatched
+variants, missing PNGs and undecodable PNGs are counted and surfaced in
+the status line ("N textures → kleur-fallback") instead of failing or
+crashing.
+
+**Known limitations:** face selection is heuristic over texture keys
+(`all`/`side`/`top`/`end`/…); per-face UVs inside model `elements[]` are
+not read, biome tinting (grass/foliage/water grayscale textures) is not
+applied, and animated textures use their first frame. The material panel
+swatches stay color-based.
 
 ## Node globals in the browser (polyfills)
 

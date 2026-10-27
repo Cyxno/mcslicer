@@ -17,6 +17,12 @@
         padding: 6px 14px; cursor: pointer; font-size: 14px;
       }
       #demo-btn:hover { background: #3a7bee; }
+      .assets-btn {
+        background: #23262e; color: #cfd4dc; border: 1px solid #333845; border-radius: 6px;
+        padding: 6px 12px; cursor: pointer; font-size: 13px;
+      }
+      .assets-btn:hover { border-color: #2d6cdf; color: white; }
+      .hidden-input { display: none; }
       .axis-btn {
         background: #23262e; color: #9aa3af; border: 1px solid #333845; border-radius: 6px;
         padding: 5px 12px; cursor: pointer; font-size: 13px; font-weight: 600;
@@ -68,6 +74,10 @@
     <div id="app">
       <div id="toolbar">
         <button id="demo-btn">Demo huisje</button>
+        <button id="assets-dir-btn" class="assets-btn" title="Wijs een assets-map aan (bv. .minecraft/assets). Alles blijft lokaal in de browser.">Textures: map…</button>
+        <button id="assets-zip-btn" class="assets-btn" title="Wijs een resource-pack of assets-zip aan. Alles blijft lokaal in de browser.">Textures: zip…</button>
+        <input id="assets-dir" class="hidden-input" type="file" webkitdirectory multiple />
+        <input id="assets-zip" class="hidden-input" type="file" accept=".zip,application/zip" />
         <span id="axis-group">
           <button class="axis-btn" data-axis="x">X</button>
           <button class="axis-btn active" data-axis="y">Y</button>

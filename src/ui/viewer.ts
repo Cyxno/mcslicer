@@ -14,11 +14,15 @@
 import {
   AmbientLight,
   BoxGeometry,
+  BufferAttribute,
+  BufferGeometry,
+  CanvasTexture,
   Color,
   DirectionalLight,
   InstancedMesh,
   Matrix4,
   MeshLambertMaterial,
+  NearestFilter,
   OrthographicCamera,
   Scene,
   WebGLRenderer,
@@ -40,6 +44,10 @@ import {
 } from '../slicer/steps.js';
 import { materialTable, sortRows, type MaterialRow, type SortDir, type SortKey } from '../slicer/materials.js';
 import { colorForBlock } from '../render/colors.js';
+import { resolveBlockstate } from '../textures/atlas.js';
+import { boxFaceUVs } from '../textures/faces.js';
+import { buildAtlas, type AtlasResult } from '../textures/loader.js';
+import { treeFromAssetFiles, type AssetFiles } from '../textures/assets.js';
 
 const BLOCK = new BoxGeometry(1, 1, 1);
 const DIM_FACTOR = 0.28;
@@ -65,6 +73,17 @@ export class Viewer {
   private sliceMeshes: SliceMesh[] = [];
   private brightMats: MeshLambertMaterial[] = [];
   private dimMats: MeshLambertMaterial[] = [];
+  /** Geometries cloned per textured type; disposed with the model. */
+  private texturedGeoms: BufferGeometry[] = [];
+
+  // Texture pipeline (phase 4a): when the user supplies assets, block
+  // types with resolvable textures render UV-mapped against one shared
+  // atlas; all other types keep color rendering. Both material kinds mix
+  // in one scene — documented in the README.
+  private assets: AssetFiles | null = null;
+  private atlas: AtlasResult | null = null;
+  private atlasTexture: CanvasTexture | null = null;
+  private lastTextureReport = '';
 
   private schem: Schematic | null = null;
   private model: SlicerModel | null = null;
@@ -144,11 +163,70 @@ export class Viewer {
       this.scene.remove(mesh);
       mesh.dispose();
     }
+    for (const geom of this.texturedGeoms) geom.dispose();
     this.meshes = [];
     this.sliceMeshes = [];
     this.brightMats = [];
     this.dimMats = [];
+    this.texturedGeoms = [];
   }
+
+  /**
+   * Supply user assets (from a picked directory or pack zip) and rebuild.
+   * The atlas is built from exactly the textures the current schematic's
+   * palette resolves to; failures surface in the status line, never
+   * silently. All processing is client-side.
+   */
+  async setAssets(files: AssetFiles, label: string): Promise<void> {
+    this.setStatus(`Textures indexeren (${label})…`);
+    try {
+      const tree = treeFromAssetFiles(files);
+      if (tree.size === 0) {
+        throw new Error('geen assets/ met blockstates of textures gevonden in deze bron');
+      }
+      this.assets = files;
+      this.assetTree = tree;
+
+      // Collect the texture paths the palette resolves to, then build the
+      // atlas from exactly those (plus per-face extras).
+      const paths = new Set<string>();
+      let resolvedCount = 0;
+      const palette = this.schem?.palette ?? [];
+      for (let i = 0; i < palette.length; i++) {
+        const r = resolveBlockstate(palette[i]!, tree);
+        if (!r) continue;
+        resolvedCount++;
+        for (const face of [r.faces.px, r.faces.nx, r.faces.py, r.faces.ny, r.faces.pz, r.faces.nz]) {
+          if (face) paths.add(face);
+        }
+        if (r.texturePath) paths.add(r.texturePath);
+      }
+      this.atlasTexture?.dispose();
+      this.atlas = await buildAtlas(files, [...paths].sort());
+      this.atlasTexture = new CanvasTexture(this.atlas.canvas);
+      this.atlasTexture.magFilter = NearestFilter;
+      this.atlasTexture.minFilter = NearestFilter;
+      this.atlasTexture.generateMipmaps = false;
+      this.atlasTexture.colorSpace = 'srgb';
+
+      const problems =
+        this.atlas.missing.length + this.atlas.broken.length > 0
+          ? `, ${this.atlas.missing.length + this.atlas.broken.length} textures → kleur-fallback`
+          : '';
+      this.lastTextureReport = `${resolvedCount} types met texture${problems}`;
+    } catch (err) {
+      this.assets = null;
+      this.assetTree = null;
+      this.atlas = null;
+      this.lastTextureReport = '';
+      const detail = err instanceof Error ? err.message : String(err);
+      this.setStatus(`Textures niet geladen: ${detail}`, true);
+      return;
+    }
+    if (this.schem) this.showSlicer(this.schem, this.model?.axis ?? 'y');
+  }
+
+  private assetTree: ReadonlyMap<string, unknown> | null = null;
 
   /** Frame the model and set the group transform used by both modes. */
   private frameModel(scale: number, size: Schematic['size']): void {
@@ -212,22 +290,56 @@ export class Viewer {
       g.coords.push([step.x + 0.5, step.y + 0.5, step.z + 0.5]);
       typeColors.set(step.paletteIndex, colorOf(step.paletteIndex, schem));
     }
-    // Build per-type material pairs once, in palette order.
+    // Build per-type material pairs once, in palette order. Types with a
+    // resolvable texture get UV-mapped geometry against the shared atlas;
+    // all other types keep color rendering (documented mix, README).
     const paletteIndices = [...typeColors.keys()].sort((a, b) => a - b);
     const typeToSlot = new Map<number, number>();
+    const typeGeometry = new Map<number, BufferGeometry>();
+    let texturedTypes = 0;
     for (const p of paletteIndices) {
+      const block = schem.palette[p]!;
       const color = typeColors.get(p)!;
-      const bright = new MeshLambertMaterial({ color });
-      const dimColor = new Color(color).multiplyScalar(DIM_FACTOR);
-      const dim = new MeshLambertMaterial({ color: dimColor });
-      typeToSlot.set(p, this.brightMats.length);
-      this.brightMats.push(bright);
-      this.dimMats.push(dim);
+      const resolved = this.assetTree && this.atlas && this.atlasTexture
+        ? resolveBlockstate(block, this.assetTree)
+        : null;
+      const rects = resolved && this.atlas
+        ? {
+            px: this.atlas.uvRects.get(resolved.faces.px ?? '') ?? null,
+            nx: this.atlas.uvRects.get(resolved.faces.nx ?? '') ?? null,
+            py: this.atlas.uvRects.get(resolved.faces.py ?? '') ?? null,
+            ny: this.atlas.uvRects.get(resolved.faces.ny ?? '') ?? null,
+            pz: this.atlas.uvRects.get(resolved.faces.pz ?? '') ?? null,
+            nz: this.atlas.uvRects.get(resolved.faces.nz ?? '') ?? null,
+          }
+        : null;
+      const fallbackRect = resolved
+        ? (this.atlas!.uvRects.get(resolved.texturePath ?? '') ?? null)
+        : null;
+      const uvs = rects ? boxFaceUVs(rects, fallbackRect) : null;
+      if (uvs && this.atlasTexture) {
+        const geom = BLOCK.clone();
+        geom.setAttribute('uv', new BufferAttribute(uvs, 2));
+        this.texturedGeoms.push(geom);
+        typeGeometry.set(p, geom);
+        typeToSlot.set(p, this.brightMats.length);
+        this.brightMats.push(new MeshLambertMaterial({ map: this.atlasTexture }));
+        this.dimMats.push(new MeshLambertMaterial({ map: this.atlasTexture, color: DIM_FACTOR }));
+        texturedTypes++;
+      } else {
+        const bright = new MeshLambertMaterial({ color });
+        const dimColor = new Color(color).multiplyScalar(DIM_FACTOR);
+        const dim = new MeshLambertMaterial({ color: dimColor });
+        typeToSlot.set(p, this.brightMats.length);
+        this.brightMats.push(bright);
+        this.dimMats.push(dim);
+      }
     }
 
     const placement = new Matrix4();
     for (const g of groups.values()) {
-      const mesh = new InstancedMesh(BLOCK, this.dimMats[typeToSlot.get(g.typeIndex)!]!, g.coords.length);
+      const geom = typeGeometry.get(g.typeIndex) ?? BLOCK;
+      const mesh = new InstancedMesh(geom, this.dimMats[typeToSlot.get(g.typeIndex)!]!, g.coords.length);
       for (let i = 0; i < g.coords.length; i++) {
         const c = g.coords[i]!;
         placement.makeTranslation(c[0]!, c[1]!, c[2]!);
@@ -249,7 +361,8 @@ export class Viewer {
     const axisNames = { x: 'X', y: 'Y', z: 'Z' } as const;
     this.setStatus(
       `${schem.size.x}×${schem.size.y}×${schem.size.z} — ${this.model.total} blocks, ` +
-      `${paletteIndices.length} types, ${slices.length} lagen langs ${axisNames[axis]}`,
+      `${paletteIndices.length} types, ${slices.length} lagen langs ${axisNames[axis]}` +
+      (texturedTypes > 0 && this.lastTextureReport ? ` · textures: ${this.lastTextureReport}` : ''),
     );
   }
 
