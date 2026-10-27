@@ -19,6 +19,7 @@ import {
   CanvasTexture,
   Color,
   DirectionalLight,
+  GridHelper,
   InstancedMesh,
   Matrix4,
   MeshLambertMaterial,
@@ -26,6 +27,7 @@ import {
   OrthographicCamera,
   Scene,
   WebGLRenderer,
+  Vector3,
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { parseSchem } from '../schem/parse.js';
@@ -75,6 +77,12 @@ export class Viewer {
   private dimMats: MeshLambertMaterial[] = [];
   /** Geometries cloned per textured type; disposed with the model. */
   private texturedGeoms: BufferGeometry[] = [];
+  /** Subtle ground grid under the model (Shulkr-style), rebuilt per model. */
+  private grid: GridHelper | null = null;
+  private cameraMode: 'orbit' | 'plan' = 'orbit';
+  /** Current group transform (scale + centering), reused by framing. */
+  private groupTransform: Matrix4 | null = null;
+  private modelScale = 1;
 
   // Texture pipeline (phase 4a): when the user supplies assets, block
   // types with resolvable textures render UV-mapped against one shared
@@ -164,6 +172,11 @@ export class Viewer {
       mesh.dispose();
     }
     for (const geom of this.texturedGeoms) geom.dispose();
+    if (this.grid) {
+      this.scene.remove(this.grid);
+      this.grid.dispose();
+      this.grid = null;
+    }
     this.meshes = [];
     this.sliceMeshes = [];
     this.brightMats = [];
@@ -247,12 +260,35 @@ export class Viewer {
 
   /** Frame the model and set the group transform used by both modes. */
   private frameModel(scale: number, size: Schematic['size']): void {
-    this.controls.target.set(0, (size.y * scale) / 2, 0);
+    const center = new Vector3(
+      0,
+      (size.y * scale) / 2,
+      0,
+    );
+    this.controls.target.copy(center);
     const fit = 14 / Math.max(size.x, size.y, size.z);
     this.camera.zoom = Math.min(Math.max(fit, 0.05), 20);
-    this.camera.position.set(1, 0.8, 1).normalize().multiplyScalar(1000 / this.camera.zoom);
+    if (this.cameraMode === 'plan') {
+      // Top-down orthographic: straight down on the model center,
+      // north (−z) up. Rotation disabled so plan stays plan.
+      this.camera.up.set(0, 0, -1);
+      this.camera.position.set(0, 1000 / this.camera.zoom, 0);
+    } else {
+      this.camera.up.set(0, 1, 0);
+      this.camera.position.set(1, 0.8, 1).normalize().multiplyScalar(1000 / this.camera.zoom);
+    }
+    this.camera.lookAt(center);
     this.camera.updateProjectionMatrix();
+    this.controls.enableRotate = this.cameraMode === 'orbit';
     this.controls.update();
+  }
+
+  /** Orbit (perspective-ish orbit) or Plan (top-down ortho) view. */
+  setCameraMode(mode: 'orbit' | 'plan'): void {
+    this.cameraMode = mode;
+    if (this.schem) {
+      this.frameModel(this.modelScale, this.schem.size);
+    }
   }
 
   /** Parse bytes and display in slicer mode; all failures are visible. */
@@ -292,9 +328,19 @@ export class Viewer {
     const centerX = schem.size.x / 2;
     const centerZ = schem.size.z / 2;
     const scale = 16 / Math.max(schem.size.x, schem.size.y, schem.size.z);
+    this.modelScale = scale;
     const group = new Matrix4();
     group.makeScale(scale, scale, scale);
     group.setPosition(-centerX * scale, 0, -centerZ * scale);
+    this.groupTransform = group.clone();
+
+    // Subtle ground grid under the build; 8-block cells, snapped to a
+    // multiple of the cell so the grid extends evenly around the model.
+    const cell = 8;
+    const span = Math.ceil(Math.max(schem.size.x, schem.size.z) / cell) * cell + cell * 2;
+    this.grid = new GridHelper(span, span / cell, 0x2a2f3a, 0x1f242e);
+    this.grid.position.y = -0.01;
+    this.scene.add(this.grid);
 
     // Group steps by (slice, type); one InstancedMesh per group.
     const groups = new Map<string, { typeIndex: number; sliceCoord: number; coords: number[][] }>();
@@ -512,6 +558,15 @@ export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, dem
       viewer.loadDemo(demoUrl, 'demo-huisje.schem');
     });
   }
+
+  // Camera mode: Orbit (free orbit) / Plan (top-down orthographic).
+  const setCam = (mode: 'orbit' | 'plan'): void => {
+    viewer.setCameraMode(mode);
+    document.getElementById('cam-orbit')?.classList.toggle('active', mode === 'orbit');
+    document.getElementById('cam-plan')?.classList.toggle('active', mode === 'plan');
+  };
+  document.getElementById('cam-orbit')?.addEventListener('click', () => setCam('orbit'));
+  document.getElementById('cam-plan')?.addEventListener('click', () => setCam('plan'));
 
   // Axis buttons
   let currentAxis: Axis = 'y';
