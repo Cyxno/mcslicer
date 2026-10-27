@@ -189,7 +189,8 @@ export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, dem
   if (demoButton && demoUrl) {
     demoButton.addEventListener('click', () => {
       // demoUrl comes from the Vite ?url import: an http path in dev, a
-      // hashed asset URL in build. Never a file:// or absolute FS path.
+      // hashed asset URL in build. Never a local-filesystem URL or
+      // absolute FS path.
       viewer.loadDemo(demoUrl, 'demo-huisje.schem');
     });
   }
