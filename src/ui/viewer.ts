@@ -22,12 +22,16 @@ import {
   GridHelper,
   InstancedMesh,
   Matrix4,
+  Mesh,
+  MeshBasicMaterial,
   MeshLambertMaterial,
   NearestFilter,
   OrthographicCamera,
+  Raycaster,
   Scene,
-  WebGLRenderer,
+  Vector2,
   Vector3,
+  WebGLRenderer,
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { parseSchem } from '../schem/parse.js';
@@ -46,6 +50,7 @@ import {
 } from '../slicer/steps.js';
 import { materialTable, sortRows, type MaterialRow, type SortDir, type SortKey } from '../slicer/materials.js';
 import { colorForBlock } from '../render/colors.js';
+import { blockInfo, toggleValue } from '../render/picking.js';
 import { resolveBlockstate } from '../textures/atlas.js';
 import { boxFaceUVs } from '../textures/faces.js';
 import { buildAtlas, type AtlasResult } from '../textures/loader.js';
@@ -59,6 +64,14 @@ interface SliceMesh {
   mesh: InstancedMesh;
   sliceCoord: number;
   typeIndex: number;
+  paletteIndex: number;
+}
+
+interface Pick {
+  paletteIndex: number;
+  x: number;
+  y: number;
+  z: number;
 }
 
 export class Viewer {
@@ -71,6 +84,7 @@ export class Viewer {
   private readonly slider: HTMLInputElement;
   private readonly matBody: HTMLElement;
   private readonly matSliceLabel: HTMLElement;
+  private readonly infoPanel: HTMLElement | null;
 
   private meshes: InstancedMesh[] = [];
   private sliceMeshes: SliceMesh[] = [];
@@ -101,18 +115,32 @@ export class Viewer {
   private sortKey: SortKey = 'total';
   private sortDir: SortDir = 'desc';
 
+  // Picking state (phase 4b). Highlight = one type forced bright across
+  // all slices; hide = type's meshes invisible and its panel row dimmed.
+  private readonly raycaster = new Raycaster();
+  private readonly pointerNDC = new Vector2();
+  private readonly hoverBox: Mesh;
+  private typeToSlot = new Map<number, number>();
+  private totals = new Map<number, number>();
+  private hiddenTypes = new Set<number>();
+  private highlightedType: number | null = null;
+  private lastPick: Pick | null = null;
+  private pointerDownAt: { x: number; y: number } | null = null;
+
   constructor(canvas: HTMLCanvasElement, els: {
     status: HTMLElement;
     progress: HTMLElement;
     slider: HTMLInputElement;
     matBody: HTMLElement;
     matSliceLabel: HTMLElement;
+    infoPanel?: HTMLElement | null;
   }) {
     this.status = els.status;
     this.progress = els.progress;
     this.slider = els.slider;
     this.matBody = els.matBody;
     this.matSliceLabel = els.matSliceLabel;
+    this.infoPanel = els.infoPanel ?? null;
 
     this.renderer = new WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
@@ -130,6 +158,27 @@ export class Viewer {
     const sun = new DirectionalLight(0xffffff, 1.6);
     sun.position.set(1, 2, 0.7);
     this.scene.add(sun);
+
+    // Hover highlight: a translucent shell slightly larger than a block,
+    // moved onto the picked instance.
+    this.hoverBox = new Mesh(
+      new BoxGeometry(1.04, 1.04, 1.04),
+      new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.16, depthWrite: false }),
+    );
+    this.hoverBox.visible = false;
+    this.scene.add(this.hoverBox);
+
+    canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
+    canvas.addEventListener('pointerdown', (e) => {
+      this.pointerDownAt = { x: e.clientX, y: e.clientY };
+    });
+    canvas.addEventListener('pointerup', (e) => {
+      const down = this.pointerDownAt;
+      this.pointerDownAt = null;
+      if (!down) return;
+      const moved = Math.abs(e.clientX - down.x) + Math.abs(e.clientY - down.y);
+      if (moved <= 4) this.onPick(e); // click, not orbit-drag
+    });
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -325,6 +374,18 @@ export class Viewer {
     this.model = buildSlicerModel(schem, axis);
     this.state = initialState();
     this.sliceCoord = -1;
+    this.hiddenTypes.clear();
+    this.highlightedType = null;
+    this.lastPick = null;
+    if (this.infoPanel) this.infoPanel.hidden = true;
+
+    // Build-wide totals per palette index (for picking + panel).
+    this.totals = new Map<number, number>();
+    for (let i = 0; i < schem.blocks.length; i++) {
+      const p = schem.blocks[i]!;
+      if (schem.palette[p] === 'minecraft:air') continue;
+      this.totals.set(p, (this.totals.get(p) ?? 0) + 1);
+    }
 
     const centerX = schem.size.x / 2;
     const centerZ = schem.size.z / 2;
@@ -361,6 +422,7 @@ export class Viewer {
     // all other types keep color rendering (documented mix, README).
     const paletteIndices = [...typeColors.keys()].sort((a, b) => a - b);
     const typeToSlot = new Map<number, number>();
+    this.typeToSlot = typeToSlot;
     const typeGeometry = new Map<number, BufferGeometry>();
     let texturedTypes = 0;
     for (const p of paletteIndices) {
@@ -418,7 +480,7 @@ export class Viewer {
       }
       mesh.applyMatrix4(group);
       this.scene.add(mesh);
-      this.sliceMeshes.push({ mesh, sliceCoord: g.sliceCoord, typeIndex: typeToSlot.get(g.typeIndex)! });
+      this.sliceMeshes.push({ mesh, sliceCoord: g.sliceCoord, typeIndex: typeToSlot.get(g.typeIndex)!, paletteIndex: g.typeIndex });
     }
 
     const slices = this.model.slices;
@@ -444,12 +506,120 @@ export class Viewer {
 
   setSliceCoord(coord: number): void {
     this.sliceCoord = coord;
-    for (const entry of this.sliceMeshes) {
-      entry.mesh.material =
-        entry.sliceCoord === coord ? this.brightMats[entry.typeIndex]! : this.dimMats[entry.typeIndex]!;
-    }
+    this.applyTypeMaterials();
     this.slider.value = String(this.sliceIndex(coord));
     this.refreshMaterials();
+  }
+
+  /** Bright for the active slice or the highlighted type; hidden = off. */
+  private applyTypeMaterials(): void {
+    for (const entry of this.sliceMeshes) {
+      const hidden = this.hiddenTypes.has(entry.paletteIndex);
+      entry.mesh.visible = !hidden;
+      const bright = entry.sliceCoord === this.sliceCoord || entry.paletteIndex === this.highlightedType;
+      entry.mesh.material = bright
+        ? this.brightMats[entry.typeIndex]!
+        : this.dimMats[entry.typeIndex]!;
+    }
+  }
+
+  /** Force one palette type bright across all slices (toggle). */
+  setHighlightedType(paletteIndex: number | null): void {
+    this.highlightedType = this.highlightedType === paletteIndex ? null : paletteIndex;
+    if (this.highlightedType !== null) this.hiddenTypes.delete(this.highlightedType);
+    this.applyTypeMaterials();
+    this.refreshMaterials();
+  }
+
+  /** Hide/show a palette type (toggle) and refresh panel + meshes. */
+  toggleHiddenType(paletteIndex: number): void {
+    this.hiddenTypes = toggleValue(this.hiddenTypes, paletteIndex).next;
+    if (this.highlightedType === paletteIndex && this.hiddenTypes.has(paletteIndex)) {
+      this.highlightedType = null;
+    }
+    this.applyTypeMaterials();
+    this.refreshMaterials();
+    this.renderInfoPanel(); // button label may flip
+  }
+
+  private raycastAt(e: PointerEvent): { mesh: SliceMesh; point: Vector3 } | null {
+    if (!this.schem) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointerNDC.set(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(this.pointerNDC, this.camera);
+    const meshes = this.sliceMeshes.filter((s) => s.mesh.visible).map((s) => s.mesh);
+    const hits = this.raycaster.intersectObjects(meshes, false);
+    const hit = hits[0];
+    const sliceMesh = hit && this.sliceMeshes.find((s) => s.mesh === hit.object);
+    if (!hit || !sliceMesh || hit.instanceId === undefined) return null;
+    const m = new Matrix4();
+    sliceMesh.mesh.getMatrixAt(hit.instanceId, m);
+    return { mesh: sliceMesh, point: new Vector3().setFromMatrixPosition(m) };
+  }
+
+  private onPointerMove(e: PointerEvent): void {
+    const hit = this.raycastAt(e);
+    if (hit) {
+      this.hoverBox.position.copy(hit.point);
+      this.hoverBox.visible = true;
+    } else {
+      this.hoverBox.visible = false;
+    }
+  }
+
+  private onPick(e: PointerEvent): void {
+    const hit = this.raycastAt(e);
+    if (!hit) {
+      this.lastPick = null;
+      this.hoverBox.visible = false;
+      if (this.infoPanel) this.infoPanel.hidden = true;
+      return;
+    }
+    // Instance translations are block centers (x+0.5): floor to coords.
+    const cx = Math.floor(hit.point.x);
+    const cy = Math.floor(hit.point.y);
+    const cz = Math.floor(hit.point.z);
+    this.lastPick = { paletteIndex: hit.mesh.paletteIndex, x: cx, y: cy, z: cz };
+    this.renderInfoPanel();
+  }
+
+  /** Fill the info panel from the current pick; no-op without panel. */
+  private renderInfoPanel(): void {
+    const panel = this.infoPanel;
+    const pick = this.lastPick;
+    if (!panel || !pick || !this.schem) return;
+    const entry = this.schem.palette[pick.paletteIndex]!;
+    const info = blockInfo(entry, pick, this.totals.get(pick.paletteIndex) ?? 0);
+    const hidden = this.hiddenTypes.has(pick.paletteIndex);
+    const highlighted = this.highlightedType === pick.paletteIndex;
+    const propsHtml = info.props.length
+      ? `<table class="props">${info.props
+          .map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`)
+          .join('')}</table>`
+      : '<div class="props-empty">geen properties</div>';
+    panel.innerHTML = `
+      <div class="info-title">${escapeHtml(info.name)}</div>
+      <div class="info-id" title="${escapeHtml(info.id)}">${escapeHtml(info.id)}</div>
+      <div class="info-row">positie <b>${info.x}, ${info.y}, ${info.z}</b></div>
+      <div class="info-row">in deze build: <b>${info.total}</b></div>
+      ${propsHtml}
+      <details class="info-raw"><summary>raw</summary><code>${escapeHtml(info.id)}</code></details>
+      <div class="info-actions">
+        <button data-action="highlight" class="nav-btn ${highlighted ? 'active' : ''}">
+          ${highlighted ? 'Highlight uit' : 'Highlight deze'}
+        </button>
+        <button data-action="hide" class="nav-btn">${hidden ? 'Tonen' : 'Verberg deze'}</button>
+      </div>`;
+    panel.hidden = false;
+    panel.querySelector('[data-action="highlight"]')?.addEventListener('click', () => {
+      this.setHighlightedType(pick.paletteIndex);
+    });
+    panel.querySelector('[data-action="hide"]')?.addEventListener('click', () => {
+      this.toggleHiddenType(pick.paletteIndex);
+    });
   }
 
   /** Slider input: land on the first step of the chosen slice index. */
@@ -483,6 +653,19 @@ export class Viewer {
     this.setStep(target.firstStep);
   }
 
+  /** Close the info panel (Escape). */
+  closeInfoPanel(): void {
+    if (!this.infoPanel) return;
+    this.infoPanel.hidden = true;
+    this.lastPick = null;
+    this.hoverBox.visible = false;
+  }
+
+  /** Hide the currently picked type (H); no-op without a pick. */
+  hidePicked(): void {
+    if (this.lastPick) this.toggleHiddenType(this.lastPick.paletteIndex);
+  }
+
   /** As-kiezer: rebuild the model on the new axis, keep position roughly. */
   setAxis(axis: Axis): void {
     if (!this.schem) return;
@@ -510,13 +693,28 @@ export class Viewer {
       const name = row.block.startsWith('minecraft:')
         ? row.block.slice('minecraft:'.length)
         : row.block;
+      const paletteIndex = this.schem!.palette.indexOf(row.block);
+      const hidden = this.hiddenTypes.has(paletteIndex);
+      const highlighted = this.highlightedType === paletteIndex;
       html.push(
-        `<tr><td class="swatch"><span class="sw" style="background:#${color.toString(16).padStart(6, '0')}"></span></td>` +
-        `<td class="blockname" title="${row.block}">${escapeHtml(name)}</td>` +
+        `<tr class="mat-row${hidden ? ' hidden-type' : ''}${highlighted ? ' highlighted-type' : ''}"` +
+        ` data-block="${escapeHtml(row.block)}" title="klik = highlight, dubbelklik = verberg/toon">` +
+        `<td class="swatch"><span class="sw" style="background:#${color.toString(16).padStart(6, '0')}"></span></td>` +
+        `<td class="blockname${hidden ? ' hidden-label' : ''}">${escapeHtml(name)}${hidden ? ' <span class="zero">(verborgen)</span>' : ''}</td>` +
         `<td class="num">${row.total}</td><td class="num">${inSlice}</td></tr>`,
       );
     }
     this.matBody.innerHTML = html.join('');
+    // Row interaction: single click toggles highlight (and unhides),
+    // double click toggles hidden.
+    for (const tr of this.matBody.querySelectorAll<HTMLTableRowElement>('tr[data-block]')) {
+      const paletteIndex = this.schem!.palette.indexOf(tr.dataset.block!);
+      tr.addEventListener('click', () => {
+        if (this.hiddenTypes.has(paletteIndex)) this.toggleHiddenType(paletteIndex);
+        this.setHighlightedType(paletteIndex);
+      });
+      tr.addEventListener('dblclick', () => this.toggleHiddenType(paletteIndex));
+    }
   }
 
   setSort(key: SortKey): void {
@@ -547,6 +745,7 @@ export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, dem
     slider: $('slice-slider') as HTMLInputElement,
     matBody: $('materials-body'),
     matSliceLabel: $('mat-slice-label'),
+    infoPanel: $('info-panel'),
   });
   viewer.setStatus('Sleep een .schem hierheen');
 
@@ -609,6 +808,8 @@ export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, dem
     const target = e.target as HTMLElement | null;
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
     switch (e.key) {
+      case 'Escape': viewer.closeInfoPanel(); break;
+      case 'h': case 'H': viewer.hidePicked(); break;
       case 'ArrowLeft': e.preventDefault(); viewer.stepPrev(); break;
       case 'ArrowRight': e.preventDefault(); viewer.stepNext(); break;
       case 'PageUp': e.preventDefault(); viewer.sliceShift(+1); break;

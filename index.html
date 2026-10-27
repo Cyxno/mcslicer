@@ -68,6 +68,28 @@
       #materials .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; }
       #materials .zero { color: #4a525c; }
       #materials .blockname { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .mat-row { cursor: pointer; }
+      .mat-row:hover { background: #171a21; }
+      .mat-row.highlighted-type { background: #1d2733; }
+      .mat-row.highlighted-type .blockname { color: #7fb3ff; }
+      .mat-row.hidden-type .sw { opacity: .3; }
+      .hidden-label { text-decoration: line-through; color: #4a525c; }
+      #info-panel {
+        position: absolute; top: 12px; right: 12px; width: 240px;
+        background: #12141af2; border: 1px solid #333845; border-radius: 8px;
+        padding: 10px 12px; color: #cfd4dc; font-size: 12.5px; z-index: 5;
+      }
+      #info-panel .info-title { font-weight: 700; font-size: 14px; margin-bottom: 2px; }
+      #info-panel .info-id { color: #6b7480; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 6px; }
+      #info-panel .info-row { margin: 2px 0; }
+      #info-panel .props { margin: 6px 0; border-collapse: collapse; width: 100%; }
+      #info-panel .props td { padding: 1px 6px 1px 0; color: #9aa3af; }
+      #info-panel .props td:last-child { color: #cfd4dc; }
+      #info-panel .props-empty { color: #4a525c; margin: 6px 0; }
+      #info-panel .info-raw { margin: 6px 0; color: #6b7480; }
+      #info-panel .info-raw code { display: block; margin-top: 3px; word-break: break-all; color: #9aa3af; font-size: 10.5px; }
+      #info-panel .info-actions { display: flex; gap: 6px; margin-top: 8px; }
+      #canvas-wrap { position: relative; }
     </style>
   </head>
   <body>
@@ -106,6 +128,7 @@
       </div>
       <div id="canvas-wrap">
         <canvas id="viewer"></canvas>
+        <div id="info-panel" hidden></div>
       </div>
       <div id="panel">
         <h2>Materialen <span id="mat-slice-label"></span></h2>
