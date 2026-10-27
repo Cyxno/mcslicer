@@ -56,6 +56,31 @@ The `Buffer` shim must be imported **before** anything that loads
 prismarine-nbt — `src/main.ts` does this as its first import (ESM evaluates
 imports in declaration order).
 
+## Supported schematic formats
+
+Dispatch is on **field presence, not the Version number** — real-world
+writers exist that emit a Version 2 header with the v3 palette layout
+("v2 hybrid"), and MCEdit-era files put their fields on the NBT root
+instead of a `Schematic` child compound.
+
+| Layout | Recognized by | Notes |
+|---|---|---|
+| Sponge v3 | `Palette` + `BlockData` | varint palette indices, yzx order |
+| Sponge v2 (palette or "hybrid") | `Palette` + `BlockData` (any Version tag) | same decode as v3; `Version` is not used to decide |
+| Sponge v2 legacy / v1 (MCEdit) | `Blocks` (+ optional nibble-packed `Data`) | numeric ids; decoded as synthetic ids `minecraft:air` (id 0) and `legacy:<id>[data=<meta>]` — no id→name mapping is shipped |
+| Either container | root-level fields or a `Schematic` child compound | accepted interchangeably |
+
+`BlockEntities` (signs, chests, …) and any other extra fields are ignored,
+never fatal. `Version`, `DataVersion` are optional; a `Version` outside
+1–3 is rejected. Air (`minecraft:air`, or legacy id 0) is optional in the
+palette. Unknown files fail with a `SchemParseError` that names the real
+missing field(s), e.g. `missing both "Palette"+"BlockData" (Sponge v2/v3)
+and "Blocks" (legacy v1)`.
+
+**Known gap:** legacy numeric ids are not mapped to modern block names —
+the viewer will show generic `legacy:*` colors until a mapping table
+(arranged or contributed) is added.
+
 ## Development
 
 ```bash

@@ -84,7 +84,7 @@ describe('parseSchem — corrupt input must yield SchemParseError, never a crash
       blockIndices: [0],
       version: 99,
     });
-    await expect(parseSchem(buf)).rejects.toThrow(/version 99/);
+    await expect(parseSchem(buf)).rejects.toThrow(/Version 99/);
   });
 
   it('rejects out-of-range block palette index', async () => {
