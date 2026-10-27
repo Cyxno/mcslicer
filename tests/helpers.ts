@@ -85,3 +85,35 @@ export function isGzipped(buf: Buffer): boolean {
     return false;
   }
 }
+
+/** Build an MCEdit-legacy (v1) buffer: Blocks + nibble-packed Data at root. */
+export function makeLegacyBuffer(opts: {
+  width: number; height: number; length: number;
+  blockIds: number[];
+  meta?: number[]; // 4-bit per block
+  gzip?: boolean;
+  nestUnderSchematic?: boolean;
+}): Buffer {
+  const { width, height, length } = opts;
+  const volume = width * height * length;
+  const data: number[] = [];
+  for (let i = 0; i < volume; i += 2) {
+    const lo = opts.meta ? opts.meta[i]! : 0;
+    const hi = opts.meta && i + 1 < volume ? opts.meta[i + 1]! : 0;
+    const packed = ((hi << 4) | lo) & 0xff; data.push(packed >= 128 ? packed - 256 : packed);
+  }
+  const fields: Record<string, { type: string; value: unknown }> = {
+    Width: { type: 'short', value: width },
+    Height: { type: 'short', value: height },
+    Length: { type: 'short', value: length },
+    Materials: { type: 'string', value: 'Alpha' },
+    Blocks: { type: 'byteArray', value: opts.blockIds },
+    Data: { type: 'byteArray', value: data },
+  };
+  const rootValue = opts.nestUnderSchematic === false
+    ? fields
+    : { Schematic: { type: 'compound', name: 'Schematic', value: fields } };
+  const root = { type: 'compound', name: 'Schematic', value: rootValue } as never;
+  const raw = nbt.writeUncompressed(root, 'big');
+  return opts.gzip === false ? Buffer.from(raw) : gzipSync(raw);
+}

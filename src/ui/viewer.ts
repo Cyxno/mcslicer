@@ -36,6 +36,7 @@ import {
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { parseSchem } from '../schem/parse.js';
+import { FORMAT_LABELS } from '../schem/types.js';
 import type { Schematic } from '../schem/types.js';
 import {
   buildSlicerModel,
@@ -673,6 +674,7 @@ export class Viewer {
     this.setStatus(
       `${schem.size.x}×${schem.size.y}×${schem.size.z} — ${this.model.total} blocks, ` +
       `${paletteIndices.length} types, ${slices.length} lagen langs ${axisNames[axis]}` +
+      ` · formaat: ${FORMAT_LABELS[schem.format]}` +
       (this.lastTextureReport ? ` · textures: ${this.lastTextureReport}` : ''),
     );
   }

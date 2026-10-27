@@ -3,9 +3,11 @@ import { parseAs, TagType, type Tags } from 'prismarine-nbt';
 import {
   AIR_BLOCK,
   SchemParseError,
+  type SchemFormat,
   type Schematic,
   type SchemSize,
 } from './types.js';
+import { legacyBlockName } from './legacy-ids.js';
 
 type NbtTag = Tags[TagType];
 type NbtRoot = Tags[TagType.Compound] & { name: string };
@@ -131,9 +133,11 @@ function parsePaletteLayout(schematic: Record<string, NbtTag>, size: SchemSize):
 
 /**
  * MCEdit-legacy layout (Sponge v1): numeric block ids in `Blocks`, optional
- * 4-bit metadata in `Data` (packed nibbles, same yzx order). There is no
- * global id->name mapping in this repo, so legacy blocks get deterministic
- * synthetic ids: "minecraft:air" for id 0, else "legacy:<id>[data=<n>]".
+ * 4-bit metadata in `Data` (packed nibbles, same yzx order). Every id+data
+ * pair is translated to a modern namespaced blockstate string via
+ * legacyBlockName (src/schem/legacy-ids.ts) so renderer, legend and
+ * textures need no legacy knowledge; unknown ids map to an explicit
+ * "legacy:unknown_<id>" marker that renders with the color fallback.
  */
 function parseLegacyLayout(schematic: Record<string, NbtTag>, size: SchemSize): { palette: string[]; blocks: Int32Array } {
   const volume = size.x * size.y * size.z;
@@ -161,9 +165,9 @@ function parseLegacyLayout(schematic: Record<string, NbtTag>, size: SchemSize): 
     } else if (rawData !== undefined) {
       const nibble = rawData[i >> 1]!;
       const meta = (i & 1) === 0 ? nibble & 0x0f : (nibble >> 4) & 0x0f;
-      name = `legacy:${id}[data=${meta}]`;
+      name = legacyBlockName(id, meta);
     } else {
-      name = `legacy:${id}`;
+      name = legacyBlockName(id, 0);
     }
     let paletteIndex = indexOf.get(name);
     if (paletteIndex === undefined) {
@@ -234,10 +238,14 @@ export async function parseSchem(input: Uint8Array | ArrayBuffer): Promise<Schem
   const size = readSize(schematic);
 
   let parsed: { palette: string[]; blocks: Int32Array };
+  let format: SchemFormat;
   if (hasPaletteLayout(schematic)) {
     parsed = parsePaletteLayout(schematic, size);
+    const version = schematic['Version'] !== undefined ? numberValue(schematic['Version'], 'Version') : 2;
+    format = version === 3 ? 'sponge-v3' : 'sponge-v2';
   } else if (hasLegacyLayout(schematic)) {
     parsed = parseLegacyLayout(schematic, size);
+    format = 'legacy-mcedit';
   } else {
     throw new SchemParseError(
       `schematic declares no block layout: missing both "Palette"+"BlockData" (Sponge v2/v3) ` +
@@ -247,5 +255,5 @@ export async function parseSchem(input: Uint8Array | ArrayBuffer): Promise<Schem
 
   const { palette, blocks } = parsed;
 
-  return { size, palette, blockCount: size.x * size.y * size.z, blocks };
+  return { size, palette, blockCount: size.x * size.y * size.z, blocks, format };
 }

@@ -7,40 +7,9 @@ import nbt from 'prismarine-nbt';
 import { parseSchem } from '../src/schem/parse.js';
 import { SchemParseError } from '../src/schem/types.js';
 import { countNonAir, layersToSteps, schemToLayers } from '../src/schem/layers.js';
+import { makeLegacyBuffer } from './helpers.js';
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
-
-/** Build an MCEdit-legacy (v1) buffer: Blocks + nibble-packed Data at root. */
-function makeLegacyBuffer(opts: {
-  width: number; height: number; length: number;
-  blockIds: number[];
-  meta?: number[]; // 4-bit per block
-  gzip?: boolean;
-  nestUnderSchematic?: boolean;
-}): Buffer {
-  const { width, height, length } = opts;
-  const volume = width * height * length;
-  const data: number[] = [];
-  for (let i = 0; i < volume; i += 2) {
-    const lo = opts.meta ? opts.meta[i]! : 0;
-    const hi = opts.meta && i + 1 < volume ? opts.meta[i + 1]! : 0;
-    data.push((hi << 4) | lo);
-  }
-  const fields: Record<string, { type: string; value: unknown }> = {
-    Width: { type: 'short', value: width },
-    Height: { type: 'short', value: height },
-    Length: { type: 'short', value: length },
-    Materials: { type: 'string', value: 'Alpha' },
-    Blocks: { type: 'byteArray', value: opts.blockIds },
-    Data: { type: 'byteArray', value: data },
-  };
-  const rootValue = opts.nestUnderSchematic === false
-    ? fields
-    : { Schematic: { type: 'compound', name: 'Schematic', value: fields } };
-  const root = { type: 'compound', name: 'Schematic', value: rootValue } as never;
-  const raw = nbt.writeUncompressed(root, 'big');
-  return opts.gzip === false ? Buffer.from(raw) : gzipSync(raw);
-}
 
 describe('layout dispatch — legacy v1 (Blocks + Data)', () => {
   it('parses a classic MCEdit .schematic with nested Schematic compound', async () => {
@@ -52,8 +21,9 @@ describe('layout dispatch — legacy v1 (Blocks + Data)', () => {
     expect(schem.size).toEqual({ x: 2, y: 1, z: 2 });
     expect(schem.blockCount).toBe(4);
     expect(schem.palette).toContain('minecraft:air');
-    expect(schem.palette).toContain('legacy:1[data=0]');
-    expect(schem.palette).toContain('legacy:4[data=0]'); // index 3 → high nibble of Data[1]
+    expect(schem.palette).toContain('minecraft:stone');
+    expect(schem.palette).toContain('minecraft:cobblestone'); // id 4, meta 0
+    expect(schem.format).toBe('legacy-mcedit');
     expect(countNonAir(schem)).toBe(3);
   });
 
@@ -65,7 +35,7 @@ describe('layout dispatch — legacy v1 (Blocks + Data)', () => {
       nestUnderSchematic: false,
     }));
     expect(schem.blockCount).toBe(1);
-    expect(schem.palette).toEqual(['legacy:17[data=2]']);
+    expect(schem.palette).toEqual(['minecraft:birch_log[axis=y]']); // id 17 meta 2
   });
 
   it('rejects truncated legacy Blocks with the real problem named', async () => {
