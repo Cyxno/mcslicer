@@ -412,19 +412,30 @@ export class Viewer {
     if (key !== this.atlasPaletteKey || !this.atlas) {
       const getBytes = (p: string): Uint8Array | undefined =>
         this.assets?.get(p) ?? this.defaultSource?.getBytes(p);
+      // Drop any stale atlas first: a failed rebuild must never leave an
+      // old atlas bound while the status claims it is current (4e E).
       this.atlasTexture?.dispose();
-      this.atlas = await buildAtlas(getBytes, [...paths].sort());
-      this.atlasTexture = new CanvasTexture(this.atlas.canvas);
-      this.atlasTexture.magFilter = NearestFilter;
-      this.atlasTexture.minFilter = NearestFilter;
-      this.atlasTexture.generateMipmaps = false;
-      this.atlasTexture.colorSpace = 'srgb';
+      this.atlasTexture = null;
+      this.atlas = null;
+      this.atlasPaletteKey = '';
+      try {
+        this.atlas = await buildAtlas(getBytes, [...paths].sort());
+      } catch (err) {
+        this.lastTextureReport = atlasReportLine(null, counts.user + counts.default);
+        throw err; // surfaces via loadFile's visible error path
+      }
+      const tex = new CanvasTexture(this.atlas.canvas);
+      tex.magFilter = NearestFilter;
+      tex.minFilter = NearestFilter;
+      tex.generateMipmaps = false;
+      tex.colorSpace = 'srgb';
+      this.atlasTexture = tex;
       this.atlasPaletteKey = key;
     }
     counts.fallback += unresolvedCount;
     // Never claim textured rendering without a bound atlas: when the atlas
     // failed to build, say resolution succeeded but rendering is pending.
-    this.lastTextureReport = this.atlas
+    this.lastTextureReport = this.atlas && this.atlasTexture
       ? sourceStatusLine(counts)
       : atlasReportLine(null, counts.user + counts.default);
   }
@@ -443,9 +454,16 @@ export class Viewer {
     this.defaultSource = source;
     this.atlasPaletteKey = '';
     if (this.schem) {
-      void this.ensureAtlas(this.schem).then(() => {
-        if (this.schem) this.showSlicer(this.schem, this.model?.axis ?? 'y');
-      });
+      void this.ensureAtlas(this.schem)
+        .catch((err: unknown) => {
+          // Never silently swallow: surface the atlas failure, but keep
+          // the schematic visible in color mode.
+          const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+          this.setStatus(`Texture-atlas mislukt (kleurmodus): ${detail}`, true);
+        })
+        .then(() => {
+          if (this.schem) this.showSlicer(this.schem, this.model?.axis ?? 'y');
+        });
     }
   }
 
