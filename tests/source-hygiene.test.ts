@@ -21,7 +21,7 @@ async function walk(dir: string): Promise<string[]> {
 }
 
 describe('browser source hygiene', () => {
-  it('src/ contains no file:// URLs, /home/ paths, or process.cwd()', async () => {
+  it('src/ contains no file:// URLs, /home/ paths, process.cwd(), node builtins, or require()', async () => {
     const files = await walk(srcDir);
     expect(files.length).toBeGreaterThan(3);
     for (const file of files) {
@@ -29,6 +29,11 @@ describe('browser source hygiene', () => {
       expect(content, `${file} references file://`).not.toMatch(/file:\/\//);
       expect(content, `${file} references /home/`).not.toMatch(/\/home\//);
       expect(content, `${file} references process.cwd()`).not.toMatch(/process\.cwd/);
+      expect(content, `${file} uses require()`).not.toMatch(/\brequire\s*\(/);
+      // node builtins must never be imported from browser code; the zlib
+      // stub lives in src/shims/ and is wired via vite alias only.
+      expect(content, `${file} imports node zlib`).not.toMatch(/from ['"](?:node:)?zlib['"]/);
+      expect(content, `${file} imports node fs`).not.toMatch(/from ['"](?:node:)?fs['"]/);
     }
   });
 });

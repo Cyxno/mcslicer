@@ -1,4 +1,5 @@
-import { parse as parseNbt, TagType, type Tags } from 'prismarine-nbt';
+import pako from 'pako';
+import { parseAs, TagType, type Tags } from 'prismarine-nbt';
 import {
   AIR_BLOCK,
   SchemParseError,
@@ -7,6 +8,7 @@ import {
 } from './types.js';
 
 type NbtTag = Tags[TagType];
+type NbtRoot = Tags[TagType.Compound] & { name: string };
 
 function compoundValue(tag: NbtTag): Record<string, NbtTag> {
   if (tag.type !== TagType.Compound) {
@@ -47,14 +49,25 @@ export async function parseSchem(input: Uint8Array | ArrayBuffer): Promise<Schem
     : Buffer.from(input);
 
   let root;
+  // prismarine-nbt's own gzip path uses node zlib, which does not exist in
+  // the browser. We gunzip with pako (pure JS) and parse the plain NBT, so
+  // zlib is never reached. Sponge schematics are big-endian NBT.
+  // Note: parseAs() resolves to { data, metadata, type } at runtime, even
+  // though its typings claim { parsed } — the typings are wrong.
+  const parseBig = async (buf: Buffer): Promise<NbtRoot> =>
+    ((await parseAs(buf, 'big')) as unknown as { data: NbtRoot }).data;
   try {
-    const result = await parseNbt(buffer);
-    root = result.parsed;
+    if (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b) {
+      const inflated = pako.ungzip(new Uint8Array(buffer));
+      root = await parseBig(Buffer.from(inflated));
+    } else {
+      root = await parseBig(buffer);
+    }
   } catch (err) {
     throw new SchemParseError('not a readable NBT/schematic file', { cause: err });
   }
 
-  const rootValue = compoundValue(root);
+  const rootValue = compoundValue(root!);
   const schematic = compoundValue(child(rootValue, 'Schematic'));
   const version = numberValue(child(schematic, 'Version'), 'Version');
   if (version !== 2 && version !== 3) {

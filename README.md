@@ -32,6 +32,30 @@ Parse and rendering run entirely in the browser: **schematic files are never upl
 - [ ] Phase 3 — slicer mode
 - [ ] Phase 4 — user textures
 
+## Node globals in the browser (polyfills)
+
+The parser uses `prismarine-nbt`, which expects a node environment. The
+audited runtime surface in the browser bundle is:
+
+| Global / builtin | Who needs it | How it is provided |
+|---|---|---|
+| `globalThis.Buffer` | protodef + prismarine-nbt use the *global* Buffer everywhere (no `require('buffer')`) | npm `buffer` polyfill, assigned in `src/schem/nodeShims.ts` |
+| `zlib` (gzip path of `parse()`/`parseAs()`) | prismarine-nbt's auto-gunzip | **bypassed**: `src/schem/parse.ts` detects gzip magic and gunzips with pako (pure JS), then calls `parseAs(decompressed, 'big')` so zlib is never reached; `zlib` is aliased to a throwing stub (`src/shims/zlib.ts`) via `vite.config.ts` |
+
+Nothing else is polyfilled on purpose — protodef/prismarine-nbt touch no
+other node builtins at runtime (`fs`/`crypto`/`assert` only appear in their
+bench/sample/test files, which are not bundled).
+
+**Before you import a second node-flavored library:** extend
+`src/schem/nodeShims.ts` (global assignment) and, for `require`d builtins,
+add a stub/alias in `vite.config.ts`. `tests/source-hygiene.test.ts` fails
+CI if browser code starts using `require()` or node builtins directly, and
+that test is also where to add new forbidden patterns.
+
+The `Buffer` shim must be imported **before** anything that loads
+prismarine-nbt — `src/main.ts` does this as its first import (ESM evaluates
+imports in declaration order).
+
 ## Development
 
 ```bash

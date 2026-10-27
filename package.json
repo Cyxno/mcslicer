@@ -20,7 +20,6 @@
     "@types/pako": "^2",
     "@types/three": "^0.186.0",
     "eslint": "^9",
-    "pako": "^2",
     "prismarine-nbt": "^2",
     "three": "^0.186.1",
     "tsx": "^4",
@@ -28,5 +27,9 @@
     "typescript-eslint": "^8",
     "vite": "^7",
     "vitest": "^3"
+  },
+  "dependencies": {
+    "buffer": "^6",
+    "pako": "^2"
   }
 }
