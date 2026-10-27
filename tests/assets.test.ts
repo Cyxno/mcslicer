@@ -9,61 +9,11 @@ import {
   treeFromAssetFiles,
 } from '../src/textures/assets.js';
 
-/** Build a minimal zip (stored or deflate-raw entries) in the test. */
-async function makeZip(entries: [string, Uint8Array][]): Promise<Uint8Array> {
-  const chunks: Uint8Array[] = [];
-  const central: Uint8Array[] = [];
-  let offset = 0;
-  const u16 = (v: number): Uint8Array => new Uint8Array([v & 0xff, (v >> 8) & 0xff]);
-  const u32 = (v: number): Uint8Array =>
-    new Uint8Array([v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >>> 24) & 0xff]);
-
-  for (const [name, bytes] of entries) {
-    let data = bytes;
-    let method = 0;
-    if ('CompressionStream' in globalThis && bytes.length > 0) {
-      // deflate-raw when the platform supports it (exercises method 8).
-      const stream = new Blob([bytes.slice().buffer as ArrayBuffer]).stream().pipeThrough(new CompressionStream('deflate-raw'));
-      data = new Uint8Array(await new Response(stream).arrayBuffer());
-      method = 8;
-    }
-    const nameBytes = new TextEncoder().encode(name);
-    const local = new Uint8Array(30 + nameBytes.length);
-    local.set(u32(0x04034b50), 0);
-    local.set(u16(method), 8);
-    local.set(u32(data.length), 18);
-    local.set(u16(nameBytes.length), 26);
-    local.set(nameBytes, 30);
-    chunks.push(local, data);
-
-    const centralName = new Uint8Array(46 + nameBytes.length);
-    centralName.set(u32(0x02014b50), 0);
-    centralName.set(u16(method), 10);
-    centralName.set(u32(data.length), 20);
-    centralName.set(u16(nameBytes.length), 28);
-    centralName.set(u32(offset), 42);
-    centralName.set(nameBytes, 46);
-    central.push(centralName);
-    offset += local.length + data.length;
-  }
-  const centralSize = central.reduce((n, c) => n + c.length, 0);
-  const eocd = new Uint8Array(22);
-  eocd.set(u32(0x06054b50), 0);
-  eocd.set(u16(entries.length), 10);
-  eocd.set(u32(centralSize), 12);
-  eocd.set(u32(offset), 16);
-  const all = [...chunks, ...central, eocd];
-  const total = all.reduce((n, c) => n + c.length, 0);
-  const out = new Uint8Array(total);
-  let pos = 0;
-  for (const c of all) {
-    out.set(c, pos);
-    pos += c.length;
-  }
-  return out;
-}
+import { makeZip } from './helpers-zip.js';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
+
+//const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
 
 describe('normalizeAssetPath', () => {
   it('strips everything before the assets/ root', () => {
