@@ -600,13 +600,50 @@ export class Viewer {
     this.slider.value = String(this.sliceIndex(coord));
     const label = document.getElementById('layer-label');
     if (label && this.model) label.textContent = `${this.model.axis}=${coord}`;
+    this.updateSliceBanner();
+    this.refreshLayerRail();
+    this.refreshMaterials();
+  }
+
+  /** Persistent slice-banner label: "laag y=N (i van M) · modus" (4e B1). */
+  private updateSliceBanner(): void {
     const banner = document.getElementById('slice-banner');
     const bannerText = document.getElementById('slice-banner-text');
-    if (banner && bannerText && this.model && this.model.total > 0) {
-      bannerText.innerHTML = `Gezaagd naar laag <b>${this.model.axis}=${coord}</b>`;
-      banner.hidden = false;
+    if (!banner || !bannerText || !this.model || this.model.total === 0) return;
+    if (this.sliceCoord < 0) {
+      banner.hidden = true;
+      return;
     }
-    this.refreshMaterials();
+    const idx = this.sliceIndex(this.sliceCoord);
+    const mode = this.sliceMode === 'cumulative' ? 't/m laag' : 'isoleer laag';
+    bannerText.innerHTML =
+      `laag <b>${this.model.axis}=${this.sliceCoord}</b> ` +
+      `(${idx + 1} van ${this.model.slices.length}) · ${mode}`;
+    banner.hidden = false;
+  }
+
+  /**
+   * Tick marks per layer on the rail: one mark per slice with a
+   * block-count tooltip ("laag y=3 · 148 blocks"); the active layer is
+   * highlighted and clicking a tick jumps to that layer (4e B1).
+   */
+  private refreshLayerRail(): void {
+    const rail = document.getElementById('layer-ticks');
+    if (!rail || !this.model) return;
+    if (this.model.slices.length === 0) {
+      rail.innerHTML = '';
+      return;
+    }
+    const active = this.sliceIndex(this.sliceCoord);
+    rail.innerHTML = this.model.slices
+      .map((s, i) =>
+        `<div class="layer-tick${i === active ? ' active' : ''}" data-index="${i}" ` +
+        `title="laag ${this.model!.axis}=${s.coord} · ${s.count} blocks"></div>`)
+      .join('');
+    for (const tick of rail.querySelectorAll<HTMLDivElement>('.layer-tick')) {
+      tick.addEventListener('click', () => this.setSliceIndex(Number(tick.dataset.index)));
+    }
+    rail.querySelector('.layer-tick.active')?.scrollIntoView({ block: 'nearest' });
   }
 
   /** "Wis slice": reset navigation, highlight and hidden types. */
@@ -683,6 +720,7 @@ export class Viewer {
     }
     const label = document.getElementById('slice-mode-label');
     if (label) label.textContent = mode === 'cumulative' ? 't/m laag' : 'isoleer laag';
+    this.updateSliceBanner(); // banner carries the mode (4e B1)
   }
 
   toggleSliceMode(): void {

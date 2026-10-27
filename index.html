@@ -122,6 +122,16 @@
         width: 20px; height: 170px; accent-color: var(--accent);
       }
       #layer-label { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; font-family: var(--mono); }
+      #layer-ticks {
+        display: flex; flex-direction: column; gap: 2px; max-height: 170px;
+        overflow-y: auto; padding: 2px 3px; scrollbar-width: none;
+      }
+      #layer-ticks .layer-tick {
+        width: 14px; height: 4px; border-radius: 2px; cursor: pointer;
+        background: #262b36; transition: background .1s;
+      }
+      #layer-ticks .layer-tick:hover { background: #3a4150; }
+      #layer-ticks .layer-tick.active { background: var(--accent); box-shadow: 0 0 4px #3d7dff88; }
       /* ---- slicer nav bar ---- */
       #slicerbar {
         grid-column: 1 / 3; display: flex; gap: 8px; align-items: center;
@@ -232,7 +242,8 @@
             <button class="axis-btn" data-axis="z" title="Lagen langs Z">Z</button>
           </span>
           <input id="slice-slider" type="range" min="0" max="0" value="0" step="1"
-                 title="Laagkiezer (PgUp/PgDn)" />
+                 title="Laagkiezer (PgUp/PgDn, Shift+scroll)" />
+          <div id="layer-ticks" title=""></div>
           <span id="layer-label">–</span>
         </div>
         <div id="bottom-toolbar">
