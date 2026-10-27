@@ -126,6 +126,8 @@ export class Viewer {
   private highlightedType: number | null = null;
   private lastPick: Pick | null = null;
   private pointerDownAt: { x: number; y: number } | null = null;
+  private lastLabel = '';
+  private measureMode = false;
 
   constructor(canvas: HTMLCanvasElement, els: {
     status: HTMLElement;
@@ -344,6 +346,7 @@ export class Viewer {
   /** Parse bytes and display in slicer mode; all failures are visible. */
   async loadFile(bytes: Uint8Array, label: string, axis: Axis = 'y'): Promise<void> {
     this.setStatus(`Parsing ${label}…`);
+    this.lastLabel = label;
     try {
       const schem = await parseSchem(bytes);
       this.schem = schem; // available for ensureAtlas before showSlicer
@@ -491,6 +494,17 @@ export class Viewer {
 
     this.frameModel(scale, schem.size);
     this.setStep(this.model.total > 0 ? 0 : -1);
+    // HUD + topbar: dimensions, block count, filename.
+    const fileName = document.getElementById('file-name');
+    if (fileName) fileName.textContent = this.lastLabel;
+    const badge = document.getElementById('device-badge');
+    if (badge) badge.hidden = false;
+    const hud = document.getElementById('hud');
+    if (hud) {
+      hud.innerHTML = `<b>${schem.size.x}×${schem.size.y}×${schem.size.z}</b> · ` +
+        `${this.model.total} blocks · ${paletteIndices.length} types`;
+      hud.hidden = false;
+    }
     const axisNames = { x: 'X', y: 'Y', z: 'Z' } as const;
     this.setStatus(
       `${schem.size.x}×${schem.size.y}×${schem.size.z} — ${this.model.total} blocks, ` +
@@ -510,7 +524,59 @@ export class Viewer {
     this.slider.value = String(this.sliceIndex(coord));
     const label = document.getElementById('layer-label');
     if (label && this.model) label.textContent = `${this.model.axis}=${coord}`;
+    const banner = document.getElementById('slice-banner');
+    const bannerText = document.getElementById('slice-banner-text');
+    if (banner && bannerText && this.model && this.model.total > 0) {
+      bannerText.innerHTML = `Gezaagd naar laag <b>${this.model.axis}=${coord}</b>`;
+      banner.hidden = false;
+    }
     this.refreshMaterials();
+  }
+
+  /** "Wis slice": reset navigation, highlight and hidden types. */
+  clearSlice(): void {
+    this.highlightedType = null;
+    this.hiddenTypes.clear();
+    this.applyTypeMaterials();
+    this.refreshMaterials();
+    this.setStep(0);
+  }
+
+  /** Ground grid visibility (Display toolbar toggle). */
+  setGridVisible(visible: boolean): void {
+    if (this.grid) this.grid.visible = visible;
+  }
+
+  /** Coordinate readout of the hovered block (Measure toggle). */
+  setMeasureMode(on: boolean): void {
+    this.measureMode = on;
+    const hud = document.getElementById('measure-hud');
+    if (hud) {
+      hud.style.display = on ? 'block' : 'none';
+      if (!on) hud.textContent = '';
+    }
+    this.hoverBox.visible = false;
+  }
+
+  /** Render one frame and download the canvas as PNG. */
+  savePhoto(): void {
+    this.renderer.render(this.scene, this.camera);
+    this.renderer.domElement.toBlob((blob) => {
+      if (!blob) {
+        this.setStatus('Screenshot mislukt', true);
+        return;
+      }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${this.lastLabel.replace(/\.schem$/i, '') || 'mcslicer'}.png`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }, 'image/png');
+  }
+
+  /** One-line texture status for the settings popover. */
+  textureReport(): string {
+    return this.lastTextureReport || 'geen textures geladen — wijs assets aan in Instellingen';
   }
 
   /** Bright for the active slice or the highlighted type; hidden = off. */
@@ -567,8 +633,22 @@ export class Viewer {
     if (hit) {
       this.hoverBox.position.copy(hit.point);
       this.hoverBox.visible = true;
+      if (this.measureMode) {
+        const hud = document.getElementById('measure-hud');
+        if (hud && this.schem) {
+          const entry = this.schem.palette[hit.mesh.paletteIndex]!.split('[')[0]!;
+          const cx = Math.floor(hit.point.x);
+          const cy = Math.floor(hit.point.y);
+          const cz = Math.floor(hit.point.z);
+          hud.textContent = `${cx}, ${cy}, ${cz} · ${entry.replace('minecraft:', '')}`;
+        }
+      }
     } else {
       this.hoverBox.visible = false;
+      if (this.measureMode) {
+        const hud = document.getElementById('measure-hud');
+        if (hud) hud.textContent = 'geen blok';
+      }
     }
   }
 
@@ -774,6 +854,43 @@ export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, dem
   };
   document.getElementById('cam-orbit')?.addEventListener('click', () => setCam('orbit'));
   document.getElementById('cam-plan')?.addEventListener('click', () => setCam('plan'));
+
+  // Bottom-center toolbar + settings popover.
+  const assetsPop = $('assets-pop');
+  const togglePop = (): void => {
+    if (!assetsPop) return;
+    assetsPop.hidden = !assetsPop.hidden;
+    const report = $('texture-report');
+    if (report) report.textContent = viewer.textureReport();
+  };
+  $('settings-btn')?.addEventListener('click', togglePop);
+  $('btn-settings')?.addEventListener('click', togglePop);
+  $('btn-slice')?.addEventListener('click', () => $('slice-slider')?.focus());
+  $('btn-display')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget as HTMLElement;
+    const on = !btn.classList.contains('active');
+    btn.classList.toggle('active', on);
+    viewer.setGridVisible(!on); // active = grid uit (werkt als toggle)
+  });
+  $('btn-photo')?.addEventListener('click', () => viewer.savePhoto());
+  $('btn-shortcuts')?.addEventListener('click', () => {
+    $('hints')?.classList.toggle('hidden-hints');
+  });
+  $('btn-measure')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget as HTMLElement;
+    const on = !btn.classList.contains('active');
+    btn.classList.toggle('active', on);
+    viewer.setMeasureMode(on);
+  });
+  $('btn-fullscreen')?.addEventListener('click', () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void document.getElementById('app')?.requestFullscreen();
+  });
+  $('slice-banner-clear')?.addEventListener('click', () => {
+    viewer.clearSlice();
+    const banner = $('slice-banner');
+    if (banner) banner.hidden = true;
+  });
 
   // Axis buttons
   let currentAxis: Axis = 'y';

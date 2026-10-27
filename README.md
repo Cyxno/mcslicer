@@ -37,7 +37,16 @@ Parse and rendering run entirely in the browser: **schematic files are never upl
   visible in the hint bar)
 - [x] **Phase 4a — user textures** (see "Your own block textures" below;
   blockstate→model→texture resolution, canvas atlas, UV rendering with
-  color fallback for unresolved types)
+  color fallback for unresolved types; works with a real `.minecraft/assets`
+  launcher layout — indexes/objects content store — as well as unpacked
+  trees and zips)
+- [x] **Phase 4b — Shulkr-parity polish** (ground grid + centered framing;
+  Orbit/Plan camera modes; raycast picking with a block info panel —
+  name, id, position, build-wide count, properties, highlight/hide that
+  sync with the materials panel; fixed plains-biome tint on grayscale
+  textures; vertical layer rail with axis switcher; dark theme with a
+  bottom-center toolbar, status HUD, slice banner and "on your device"
+  badge)
 
 ## Your own block textures (phase 4a)
 
@@ -79,8 +88,11 @@ crashing.
 
 **Known limitations:** face selection is heuristic over texture keys
 (`all`/`side`/`top`/`end`/…); per-face UVs inside model `elements[]` are
-not read, biome tinting (grass/foliage/water grayscale textures) is not
-applied, and animated textures use their first frame. The material panel
+not read; biome tinting is approximated with **fixed plains-biome
+colors** applied to the whole block (`src/textures/tint.ts`: grass
+0x91BD59, foliage 0x77AB2F, fixed birch/spruce leaf colors) — real
+per-face, per-biome coloring is out of scope; animated textures use
+their first frame. The material panel
 swatches stay color-based.
 
 ## Node globals in the browser (polyfills)

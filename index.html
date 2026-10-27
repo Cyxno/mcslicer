@@ -5,135 +5,226 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>mcslicer</title>
     <style>
-      :root { color-scheme: dark; }
-      html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
-      #app { display: grid; grid-template-rows: auto auto 1fr auto; grid-template-columns: 1fr 280px; height: 100%; }
-      #toolbar {
+      :root {
+        color-scheme: dark;
+        --bg: #101218;
+        --panel: #14161d;
+        --panel-2: #181b23;
+        --line: #23262e;
+        --text: #d5dae2;
+        --text-dim: #8b94a3;
+        --text-faint: #5b6472;
+        --accent: #3d7dff;
+        --accent-soft: #1d2733;
+        --danger: #ff6b6b;
+        --radius: 9px;
+        --font: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+        --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Menlo, monospace;
+      }
+      html, body { margin: 0; height: 100%; font-family: var(--font); background: var(--bg); color: var(--text); }
+      #app {
+        display: grid; grid-template-rows: auto 1fr auto;
+        grid-template-columns: 1fr 300px; height: 100%;
+      }
+      /* ---- topbar ---- */
+      #topbar {
         grid-column: 1 / 3; display: flex; gap: 10px; align-items: center;
-        padding: 8px 12px; background: #12141a; color: #cfd4dc; flex-wrap: wrap;
+        padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line);
+        flex-wrap: wrap;
       }
-      #demo-btn {
-        background: #2d6cdf; color: white; border: 0; border-radius: 6px;
-        padding: 6px 14px; cursor: pointer; font-size: 14px;
+      #app-name { font-weight: 700; font-size: 14px; letter-spacing: .02em; color: var(--text); }
+      #app-name span { color: var(--accent); }
+      #file-name { font-size: 13px; color: var(--text); font-family: var(--mono); }
+      #device-badge {
+        display: inline-flex; align-items: center; gap: 5px;
+        font-size: 11px; font-weight: 600; color: #58c98b;
+        background: #12241a; border: 1px solid #1e3d2a; border-radius: 999px;
+        padding: 2px 9px;
       }
-      #demo-btn:hover { background: #3a7bee; }
-      .assets-btn {
-        background: #23262e; color: #cfd4dc; border: 1px solid #333845; border-radius: 6px;
-        padding: 6px 12px; cursor: pointer; font-size: 13px;
+      #device-badge::before { content: "●"; font-size: 8px; }
+      .spacer { flex: 1; }
+      .btn {
+        background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+        border-radius: 7px; padding: 5px 12px; cursor: pointer; font-size: 13px;
+        font-family: var(--font);
       }
-      .assets-btn:hover { border-color: #2d6cdf; color: white; }
+      .btn:hover { border-color: var(--accent); color: #fff; }
+      .btn.primary { background: #2d6cdf; border-color: #2d6cdf; color: #fff; }
+      .btn.primary:hover { background: #3d7dff; }
+      .btn.active { background: var(--accent-soft); border-color: var(--accent); color: #cfe0ff; }
+      #assets-pop {
+        position: absolute; top: 44px; right: 14px; z-index: 20; width: 320px;
+        background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+        padding: 12px; font-size: 12.5px; color: var(--text-dim);
+        box-shadow: 0 8px 24px #0009;
+      }
+      #assets-pop h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); }
+      #assets-pop p { margin: 6px 0; }
+      #assets-pop .row { display: flex; gap: 6px; margin-top: 8px; }
       .hidden-input { display: none; }
-      .axis-btn {
-        background: #23262e; color: #9aa3af; border: 1px solid #333845; border-radius: 6px;
-        padding: 5px 12px; cursor: pointer; font-size: 13px; font-weight: 600;
+      /* ---- main area ---- */
+      #canvas-wrap { grid-row: 2; grid-column: 1; position: relative; min-height: 0; }
+      canvas { width: 100%; height: 100%; display: block; outline: none; }
+      .overlay {
+        position: absolute; z-index: 4; background: #12141acc; border: 1px solid var(--line);
+        border-radius: var(--radius); padding: 6px 12px; font-size: 12.5px; color: var(--text-dim);
+        backdrop-filter: blur(4px);
       }
-      .axis-btn.active { background: #2d6cdf; color: white; border-color: #2d6cdf; }
+      #hud { top: 12px; left: 12px; font-variant-numeric: tabular-nums; }
+      #hud b { color: var(--text); font-weight: 600; }
+      #slice-banner {
+        top: 12px; left: 50%; transform: translateX(-50%);
+        display: flex; gap: 10px; align-items: center; white-space: nowrap;
+      }
+      #slice-banner b { color: #cfe0ff; }
+      #slice-banner .link {
+        background: none; border: none; color: var(--accent); cursor: pointer;
+        font-size: 12px; padding: 0; font-family: var(--font);
+      }
+      #slice-banner .link:hover { text-decoration: underline; }
+      #measure-hud {
+        bottom: 74px; left: 50%; transform: translateX(-50%);
+        font-family: var(--mono); font-size: 12px; color: #ffd479; border-color: #4a3d1e;
+        display: none;
+      }
+      /* ---- bottom-center toolbar ---- */
+      #bottom-toolbar {
+        position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+        display: flex; gap: 6px; align-items: center; z-index: 5;
+        background: #12141ae6; border: 1px solid var(--line); border-radius: 11px;
+        padding: 6px 8px; backdrop-filter: blur(6px);
+      }
+      #bottom-toolbar .tb {
+        background: none; border: 1px solid transparent; color: var(--text-dim);
+        border-radius: 7px; padding: 5px 9px; cursor: pointer; font-size: 14px;
+        line-height: 1; font-family: var(--font);
+      }
+      #bottom-toolbar .tb:hover { background: var(--panel-2); color: var(--text); }
+      #bottom-toolbar .tb.active { background: var(--accent-soft); border-color: var(--accent); color: #cfe0ff; }
+      #bottom-toolbar .sep { width: 1px; height: 20px; background: var(--line); margin: 0 2px; }
+      #bottom-toolbar .tb-label { font-size: 12px; padding: 5px 10px; }
+      /* ---- layer rail ---- */
       #layer-rail {
         position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
         display: flex; flex-direction: column; align-items: center; gap: 10px;
-        background: #12141ab0; border: 1px solid #23262e; border-radius: 8px;
-        padding: 10px 6px; z-index: 4;
+        background: #12141ab0; border: 1px solid var(--line); border-radius: var(--radius);
+        padding: 10px 6px; z-index: 4; backdrop-filter: blur(4px);
       }
       #layer-rail #axis-group { display: flex; flex-direction: column; gap: 4px; }
-      #layer-rail .axis-btn { padding: 3px 9px; font-size: 12px; }
+      #layer-rail .axis-btn {
+        background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--line);
+        border-radius: 6px; padding: 3px 9px; cursor: pointer; font-size: 12px; font-weight: 600;
+      }
+      #layer-rail .axis-btn:hover { color: var(--text); }
+      #layer-rail .axis-btn.active { background: var(--accent-soft); color: #cfe0ff; border-color: var(--accent); }
       #slice-slider {
         writing-mode: vertical-lr; direction: rtl;
-        width: 20px; height: 170px; accent-color: #2d6cdf;
+        width: 20px; height: 170px; accent-color: var(--accent);
       }
-      #layer-label { font-size: 11px; color: #9aa3af; font-variant-numeric: tabular-nums; }
-      #status { font-size: 13px; color: #9aa3af; }
-      #status.error { color: #ff6b6b; font-weight: 600; }
+      #layer-label { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; font-family: var(--mono); }
+      /* ---- slicer nav bar ---- */
       #slicerbar {
         grid-column: 1 / 3; display: flex; gap: 8px; align-items: center;
-        padding: 6px 12px; background: #171a21; color: #cfd4dc; flex-wrap: wrap;
+        padding: 6px 14px; background: var(--panel); border-top: 1px solid var(--line);
+        color: var(--text-dim); flex-wrap: wrap;
       }
       .nav-btn {
-        background: #23262e; color: #cfd4dc; border: 1px solid #333845; border-radius: 6px;
-        padding: 4px 12px; cursor: pointer; font-size: 14px; min-width: 34px;
+        background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+        border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 14px; min-width: 34px;
       }
-      .nav-btn:hover { background: #2d6cdf; }
-      #progress { font-size: 13px; color: #cfd4dc; font-variant-numeric: tabular-nums; }
+      .nav-btn:hover { border-color: var(--accent); }
+      .nav-btn.active { background: var(--accent-soft); border-color: var(--accent); }
+      #progress { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+      /* ---- hints ---- */
       #hints {
-        grid-column: 1 / 3; padding: 5px 12px; background: #101218; color: #6b7480;
-        font-size: 12px; white-space: nowrap; overflow-x: auto;
+        grid-column: 1 / 3; padding: 5px 14px; background: var(--bg); color: var(--text-faint);
+        font-size: 12px; white-space: nowrap; overflow-x: auto; border-top: 1px solid var(--line);
       }
+      #hints.hidden-hints { display: none; }
       #hints kbd {
-        background: #23262e; border: 1px solid #333845; border-radius: 4px;
-        padding: 1px 5px; font-size: 11px; color: #9aa3af;
+        background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px;
+        padding: 1px 5px; font-size: 11px; color: var(--text-dim); font-family: var(--mono);
       }
-      #canvas-wrap { grid-row: 3; grid-column: 1; min-height: 0; }
-      canvas { width: 100%; height: 100%; display: block; outline: none; }
+      /* ---- left rail: materials ---- */
       #panel {
-        grid-row: 3; grid-column: 2; background: #12141a; color: #cfd4dc;
-        overflow-y: auto; padding: 10px; font-size: 13px; border-left: 1px solid #23262e;
+        grid-row: 2; grid-column: 2; background: var(--panel); color: var(--text);
+        overflow-y: auto; padding: 12px; font-size: 13px; border-left: 1px solid var(--line);
       }
-      #panel h2 { margin: 2px 0 8px; font-size: 13px; color: #9aa3af; text-transform: uppercase; letter-spacing: .05em; }
+      #panel h2 {
+        margin: 2px 0 10px; font-size: 12px; color: var(--text-dim);
+        text-transform: uppercase; letter-spacing: .07em; font-weight: 600;
+      }
       #materials { width: 100%; border-collapse: collapse; }
       #materials th {
-        text-align: left; cursor: pointer; color: #9aa3af; font-weight: 600;
-        border-bottom: 1px solid #23262e; padding: 4px 6px; user-select: none;
+        text-align: left; cursor: pointer; color: var(--text-dim); font-weight: 600;
+        border-bottom: 1px solid var(--line); padding: 4px 6px; user-select: none; font-size: 12px;
       }
-      #materials th:hover { color: #cfd4dc; }
+      #materials th:hover { color: var(--text); }
       #materials th.num, #materials td.num { text-align: right; font-variant-numeric: tabular-nums; }
       #materials td { padding: 3px 6px; border-bottom: 1px solid #1a1d25; }
       #materials td.swatch { width: 14px; }
       #materials .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; }
-      #materials .zero { color: #4a525c; }
+      #materials .zero { color: var(--text-faint); }
       #materials .blockname { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .mat-row { cursor: pointer; }
-      .mat-row:hover { background: #171a21; }
-      .mat-row.highlighted-type { background: #1d2733; }
+      .mat-row:hover { background: var(--panel-2); }
+      .mat-row.highlighted-type { background: var(--accent-soft); }
       .mat-row.highlighted-type .blockname { color: #7fb3ff; }
       .mat-row.hidden-type .sw { opacity: .3; }
-      .hidden-label { text-decoration: line-through; color: #4a525c; }
+      .hidden-label { text-decoration: line-through; color: var(--text-faint); }
+      /* ---- info panel ---- */
       #info-panel {
-        position: absolute; top: 12px; right: 12px; width: 240px;
-        background: #12141af2; border: 1px solid #333845; border-radius: 8px;
-        padding: 10px 12px; color: #cfd4dc; font-size: 12.5px; z-index: 5;
+        position: absolute; top: 12px; right: 12px; width: 250px;
+        background: #12141af2; border: 1px solid var(--line); border-radius: var(--radius);
+        padding: 11px 13px; color: var(--text); font-size: 12.5px; z-index: 6;
+        backdrop-filter: blur(4px);
       }
       #info-panel .info-title { font-weight: 700; font-size: 14px; margin-bottom: 2px; }
-      #info-panel .info-id { color: #6b7480; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 6px; }
-      #info-panel .info-row { margin: 2px 0; }
+      #info-panel .info-id { color: var(--text-faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 6px; font-family: var(--mono); }
+      #info-panel .info-row { margin: 2px 0; color: var(--text-dim); }
+      #info-panel .info-row b { color: var(--text); font-weight: 600; }
       #info-panel .props { margin: 6px 0; border-collapse: collapse; width: 100%; }
-      #info-panel .props td { padding: 1px 6px 1px 0; color: #9aa3af; }
-      #info-panel .props td:last-child { color: #cfd4dc; }
-      #info-panel .props-empty { color: #4a525c; margin: 6px 0; }
-      #info-panel .info-raw { margin: 6px 0; color: #6b7480; }
-      #info-panel .info-raw code { display: block; margin-top: 3px; word-break: break-all; color: #9aa3af; font-size: 10.5px; }
+      #info-panel .props td { padding: 1px 6px 1px 0; color: var(--text-dim); }
+      #info-panel .props td:last-child { color: var(--text); font-family: var(--mono); font-size: 11.5px; }
+      #info-panel .props-empty { color: var(--text-faint); margin: 6px 0; }
+      #info-panel .info-raw { margin: 6px 0; color: var(--text-faint); }
+      #info-panel .info-raw code { display: block; margin-top: 3px; word-break: break-all; color: var(--text-dim); font-size: 10.5px; }
       #info-panel .info-actions { display: flex; gap: 6px; margin-top: 8px; }
-      #canvas-wrap { position: relative; }
+      #status { font-size: 13px; color: var(--text-dim); }
+      #status.error { color: var(--danger); font-weight: 600; }
     </style>
   </head>
   <body>
     <div id="app">
-      <div id="toolbar">
-        <button id="demo-btn">Demo huisje</button>
-        <button id="assets-dir-btn" class="assets-btn" title="Wijs een assets-map aan (bv. .minecraft/assets). Alles blijft lokaal in de browser.">Textures: map…</button>
-        <button id="assets-zip-btn" class="assets-btn" title="Wijs een resource-pack of assets-zip aan. Alles blijft lokaal in de browser.">Textures: zip…</button>
+      <div id="topbar">
+        <span id="app-name">mc<span>slicer</span></span>
+        <span id="file-name">geen bestand</span>
+        <span id="device-badge" title="Bestanden verlaten je toestel niet — alles wordt lokaal verwerkt">Op je toestel</span>
+        <span class="spacer"></span>
+        <button id="demo-btn" class="btn primary">Demo huisje</button>
+        <button id="settings-btn" class="btn" title="Textures instellen">⚙ Instellingen</button>
+        <div id="assets-pop" hidden>
+          <h3>Block-textures</h3>
+          <p>Wijs je eigen Minecraft-assets aan (map met <code>assets/</code>-root,
+             bv. <code>.minecraft/assets</code>, of een resource-pack-zip).
+             Alles blijft lokaal in je browser — niets wordt geüpload.</p>
+          <div class="row">
+            <button id="assets-dir-btn" class="btn">Map…</button>
+            <button id="assets-zip-btn" class="btn">Zip…</button>
+          </div>
+          <p id="texture-report"></p>
+        </div>
         <input id="assets-dir" class="hidden-input" type="file" webkitdirectory multiple />
         <input id="assets-zip" class="hidden-input" type="file" accept=".zip,application/zip" />
-        <span id="cam-group">
-          <button class="axis-btn active" id="cam-orbit" title="Orbit-weergave">Orbit</button>
-          <button class="axis-btn" id="cam-plan" title="Plan-weergave (top-down)">Plan</button>
-        </span>
-        <span id="status"></span>
-      </div>
-      <div id="slicerbar">
-        <button class="nav-btn" id="first-btn" title="Eerste stap (Home)">⏮</button>
-        <button class="nav-btn" id="prev-btn" title="Vorige stap (←)">◀</button>
-        <button class="nav-btn" id="next-btn" title="Volgende stap (→)">▶</button>
-        <button class="nav-btn" id="last-btn" title="Laatste stap (End)">⏭</button>
-        <span id="progress"></span>
-      </div>
-      <div id="hints">
-        <kbd>←</kbd>/<kbd>→</kbd> vorige/volgende stap ·
-        <kbd>PgUp</kbd>/<kbd>PgDn</kbd> laag omhoog/omlaag ·
-        <kbd>Home</kbd>/<kbd>End</kbd> eerste/laatste stap ·
-        <kbd>←</kbd>/<kbd>→</kbd> op de slider = laag ·
-        muis-slepen = orbit, scroll = zoom · sleep een <kbd>.schem</kbd> op het canvas
       </div>
       <div id="canvas-wrap">
         <canvas id="viewer"></canvas>
+        <div id="hud" class="overlay" hidden></div>
+        <div id="slice-banner" class="overlay" hidden>
+          <span id="slice-banner-text"></span>
+          <button id="slice-banner-clear" class="link">Wis slice</button>
+        </div>
+        <div id="measure-hud" class="overlay"></div>
         <div id="layer-rail">
           <span id="axis-group">
             <button class="axis-btn" data-axis="x" title="Lagen langs X">X</button>
@@ -143,6 +234,18 @@
           <input id="slice-slider" type="range" min="0" max="0" value="0" step="1"
                  title="Laagkiezer (PgUp/PgDn)" />
           <span id="layer-label">–</span>
+        </div>
+        <div id="bottom-toolbar">
+          <button class="tb tb-label active" id="cam-orbit" title="Orbit-weergave">Orbit</button>
+          <button class="tb tb-label" id="cam-plan" title="Plan-weergave (top-down)">Plan</button>
+          <span class="sep"></span>
+          <button class="tb" id="btn-slice" title="Naar de laagkiezer">🪚</button>
+          <button class="tb" id="btn-measure" title="Coördinaten van het blok onder de muis">📐</button>
+          <button class="tb" id="btn-display" title="Grid-vloer aan/uit">▦</button>
+          <button class="tb" id="btn-photo" title="Screenshot opslaan">📷</button>
+          <button class="tb" id="btn-shortcuts" title="Sneltoetsen tonen/verbergen">⌨</button>
+          <button class="tb" id="btn-settings" title="Textures instellen">⚙</button>
+          <button class="tb" id="btn-fullscreen" title="Volledig scherm">⛶</button>
         </div>
         <div id="info-panel" hidden></div>
       </div>
@@ -159,6 +262,24 @@
           </thead>
           <tbody id="materials-body"></tbody>
         </table>
+      </div>
+      <div id="slicerbar">
+        <button class="nav-btn" id="first-btn" title="Eerste stap (Home)">⏮</button>
+        <button class="nav-btn" id="prev-btn" title="Vorige stap (←)">◀</button>
+        <button class="nav-btn" id="next-btn" title="Volgende stap (→)">▶</button>
+        <button class="nav-btn" id="last-btn" title="Laatste stap (End)">⏭</button>
+        <span id="progress"></span>
+        <span class="spacer"></span>
+        <span id="status"></span>
+      </div>
+      <div id="hints">
+        <kbd>←</kbd>/<kbd>→</kbd> vorige/volgende stap ·
+        <kbd>PgUp</kbd>/<kbd>PgDn</kbd> laag ·
+        <kbd>Home</kbd>/<kbd>End</kbd> eerste/laatste ·
+        <kbd>H</kbd> verberg gekozen type ·
+        <kbd>Esc</kbd> paneel dicht ·
+        muis-slepen = orbit, scroll = zoom · klik op een blok voor info ·
+        sleep een <kbd>.schem</kbd> op het canvas
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
