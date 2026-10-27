@@ -4,8 +4,35 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>mcslicer</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
+      #app { display: flex; flex-direction: column; height: 100%; }
+      #toolbar {
+        display: flex; gap: 12px; align-items: center;
+        padding: 8px 12px; background: #12141a; color: #cfd4dc;
+      }
+      #demo-btn {
+        background: #2d6cdf; color: white; border: 0; border-radius: 6px;
+        padding: 6px 14px; cursor: pointer; font-size: 14px;
+      }
+      #demo-btn:hover { background: #3a7bee; }
+      #status { font-size: 13px; color: #9aa3af; }
+      #status.error { color: #ff6b6b; font-weight: 600; }
+      #canvas-wrap { flex: 1; min-height: 0; }
+      canvas { width: 100%; height: 100%; display: block; outline: none; }
+    </style>
   </head>
   <body>
+    <div id="app">
+      <div id="toolbar">
+        <button id="demo-btn">Load demo house</button>
+        <span id="status"></span>
+      </div>
+      <div id="canvas-wrap">
+        <canvas id="viewer"></canvas>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

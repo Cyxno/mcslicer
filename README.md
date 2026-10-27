@@ -28,7 +28,7 @@ Parse and rendering run entirely in the browser: **schematic files are never upl
   - Invariants, enforced by tests: `sum(layer counts) === total non-air blocks` (exact), every step === exactly one block
   - Corrupt/truncated input always yields a typed `SchemParseError`, never a crash
   - Fixture `tests/fixtures/demo-huisje.schem` (20×10×20 house: walls, windows, door, gabled roof)
-- [ ] Phase 2 — 3D viewer
+- [x] **Phase 2 — 3D viewer** (drag-drop a `.schem` or use the demo button; one InstancedMesh per block type, orthographic orbit camera, colors from `src/render/colors.ts`, unknown blocks get a deterministic fallback color)
 - [ ] Phase 3 — slicer mode
 - [ ] Phase 4 — user textures
 
