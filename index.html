@@ -28,7 +28,19 @@
         padding: 5px 12px; cursor: pointer; font-size: 13px; font-weight: 600;
       }
       .axis-btn.active { background: #2d6cdf; color: white; border-color: #2d6cdf; }
-      #slice-slider { flex: 1; min-width: 160px; accent-color: #2d6cdf; }
+      #layer-rail {
+        position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+        display: flex; flex-direction: column; align-items: center; gap: 10px;
+        background: #12141ab0; border: 1px solid #23262e; border-radius: 8px;
+        padding: 10px 6px; z-index: 4;
+      }
+      #layer-rail #axis-group { display: flex; flex-direction: column; gap: 4px; }
+      #layer-rail .axis-btn { padding: 3px 9px; font-size: 12px; }
+      #slice-slider {
+        writing-mode: vertical-lr; direction: rtl;
+        width: 20px; height: 170px; accent-color: #2d6cdf;
+      }
+      #layer-label { font-size: 11px; color: #9aa3af; font-variant-numeric: tabular-nums; }
       #status { font-size: 13px; color: #9aa3af; }
       #status.error { color: #ff6b6b; font-weight: 600; }
       #slicerbar {
@@ -100,16 +112,10 @@
         <button id="assets-zip-btn" class="assets-btn" title="Wijs een resource-pack of assets-zip aan. Alles blijft lokaal in de browser.">Textures: zip…</button>
         <input id="assets-dir" class="hidden-input" type="file" webkitdirectory multiple />
         <input id="assets-zip" class="hidden-input" type="file" accept=".zip,application/zip" />
-        <span id="axis-group">
-          <button class="axis-btn" data-axis="x">X</button>
-          <button class="axis-btn active" data-axis="y">Y</button>
-          <button class="axis-btn" data-axis="z">Z</button>
-        </span>
         <span id="cam-group">
           <button class="axis-btn active" id="cam-orbit" title="Orbit-weergave">Orbit</button>
           <button class="axis-btn" id="cam-plan" title="Plan-weergave (top-down)">Plan</button>
         </span>
-        <input id="slice-slider" type="range" min="0" max="0" value="0" step="1" />
         <span id="status"></span>
       </div>
       <div id="slicerbar">
@@ -128,6 +134,16 @@
       </div>
       <div id="canvas-wrap">
         <canvas id="viewer"></canvas>
+        <div id="layer-rail">
+          <span id="axis-group">
+            <button class="axis-btn" data-axis="x" title="Lagen langs X">X</button>
+            <button class="axis-btn active" data-axis="y" title="Lagen langs Y">Y</button>
+            <button class="axis-btn" data-axis="z" title="Lagen langs Z">Z</button>
+          </span>
+          <input id="slice-slider" type="range" min="0" max="0" value="0" step="1"
+                 title="Laagkiezer (PgUp/PgDn)" />
+          <span id="layer-label">–</span>
+        </div>
         <div id="info-panel" hidden></div>
       </div>
       <div id="panel">

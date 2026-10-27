@@ -508,6 +508,8 @@ export class Viewer {
     this.sliceCoord = coord;
     this.applyTypeMaterials();
     this.slider.value = String(this.sliceIndex(coord));
+    const label = document.getElementById('layer-label');
+    if (label && this.model) label.textContent = `${this.model.axis}=${coord}`;
     this.refreshMaterials();
   }
 
