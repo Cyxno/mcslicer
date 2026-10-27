@@ -1075,9 +1075,22 @@ export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, dem
   }
 
   // Slice slider (native arrows work when focused; PgUp/PgDn work globally).
+  // The 'input' event fires continuously while dragging AND on focused
+  // keyboard arrows, so the slice updates live — never only on release.
   $('slice-slider').addEventListener('input', (e) => {
     viewer.setSliceIndex(Number((e.target as HTMLInputElement).value));
   });
+
+  // Shift+scroll above the canvas = layer step (plain scroll stays zoom).
+  // Capture phase so OrbitControls' zoom handler is bypassed; with Shift
+  // held, some browsers move the delta to deltaX, so read the dominant axis.
+  canvas.addEventListener('wheel', (e) => {
+    if (!e.shiftKey) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    viewer.sliceShift(delta > 0 ? +1 : -1);
+  }, { capture: true, passive: false });
 
   // Step buttons
   $('first-btn').addEventListener('click', () => viewer.setStep(0));
