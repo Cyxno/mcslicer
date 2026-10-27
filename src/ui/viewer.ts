@@ -20,6 +20,7 @@ import {
   Color,
   DirectionalLight,
   GridHelper,
+  Group,
   InstancedMesh,
   Matrix4,
   Mesh,
@@ -52,6 +53,7 @@ import {
 } from '../slicer/steps.js';
 import { baseTypeName, materialTable, sortRows, type MaterialRow, type SortDir, type SortKey } from '../slicer/materials.js';
 import { colorForBlock } from '../render/colors.js';
+import { blockCenterLocal, fitScale, modelMatrix, worldToBlock } from '../render/transform.js';
 import { blockInfo, pointerToNdc, toggleValue } from '../render/picking.js';
 import { resolveBlockstate } from '../textures/atlas.js';
 import { boxFaceUVs } from '../textures/faces.js';
@@ -124,6 +126,8 @@ export class Viewer {
   // all slices; hide = type's meshes invisible and its panel row dimmed.
   private readonly raycaster = new Raycaster();
   private readonly pointerNDC = new Vector2();
+  /** Overlays (hover, step marker, grid) in model space, under one transform. */
+  private readonly modelGroup = new Group();
   private readonly hoverBox: Mesh;
   private typeToSlot = new Map<number, number>();
   private totals = new Map<number, number>();
@@ -166,14 +170,18 @@ export class Viewer {
     sun.position.set(1, 2, 0.7);
     this.scene.add(sun);
 
-    // Hover highlight: a translucent shell slightly larger than a block,
-    // moved onto the picked instance.
+    // Hover highlight: a translucent shell exactly one block in MODEL
+    // space, parented under the model transform group. In world space a
+    // 1-unit box spans ~2.6 blocks at typical fit scales (the 4e bug);
+    // local sizing keeps it one block at any zoom.
+    this.modelGroup.matrixAutoUpdate = false;
+    this.scene.add(this.modelGroup);
     this.hoverBox = new Mesh(
-      new BoxGeometry(1.04, 1.04, 1.04),
+      new BoxGeometry(1, 1, 1),
       new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.16, depthWrite: false }),
     );
     this.hoverBox.visible = false;
-    this.scene.add(this.hoverBox);
+    this.modelGroup.add(this.hoverBox);
 
     canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
     // Leaving the canvas must never leave a stale hover box behind (the 4d
@@ -456,14 +464,13 @@ export class Viewer {
       this.totals.set(p, (this.totals.get(p) ?? 0) + 1);
     }
 
-    const centerX = schem.size.x / 2;
-    const centerZ = schem.size.z / 2;
-    const scale = 16 / Math.max(schem.size.x, schem.size.y, schem.size.z);
+    const scale = fitScale(schem.size);
     this.modelScale = scale;
-    const group = new Matrix4();
-    group.makeScale(scale, scale, scale);
-    group.setPosition(-centerX * scale, 0, -centerZ * scale);
+    // Single source of truth for the model transform (meshes bake it in,
+    // overlays live under it in model space).
+    const group = modelMatrix(schem.size);
     this.groupTransform = group.clone();
+    this.modelGroup.matrix.copy(group);
 
     // Subtle ground grid under the build; 8-block cells, snapped to a
     // multiple of the cell so the grid extends evenly around the model.
@@ -720,19 +727,22 @@ export class Viewer {
     return { mesh: sliceMesh, point: hit.point.clone() };
   }
 
-  /** World-space point → schematic block coords (inverse group transform). */
+  /** World-space point -> schematic block coords (inverse group transform). */
   private worldToBlock(p: Vector3): { x: number; y: number; z: number } {
-    const local = this.groupTransform
-      ? p.clone().applyMatrix4(this.groupTransform.clone().invert())
-      : p.clone();
-    return { x: Math.floor(local.x), y: Math.floor(local.y), z: Math.floor(local.z) };
+    if (!this.groupTransform) {
+      return { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) };
+    }
+    return worldToBlock(this.groupTransform, p);
   }
 
   private onPointerMove(e: PointerEvent): void {
     const hit = this.raycastAt(e);
     if (hit) {
-      // hoverBox lives in world space; hit.point already is.
-      this.hoverBox.position.copy(hit.point);
+      // hoverBox is a child of the model transform group: place it at the
+      // block center in LOCAL coordinates so it is exactly one block wide
+      // (world-space placement made it ~2.6 blocks at fit scale).
+      const c = this.worldToBlock(hit.point);
+      this.hoverBox.position.copy(blockCenterLocal(c));
       this.hoverBox.visible = true;
       if (this.measureMode) {
         const hud = document.getElementById('measure-hud');
