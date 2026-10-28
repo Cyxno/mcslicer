@@ -126,6 +126,36 @@ export function jumpInfo(
   return { jump: distance > threshold, distance, dx, dy, dz };
 }
 
+/**
+ * Layer-wise jump inside the guide (PgUp/PgDn/Shift+scroll in guide mode):
+ * index of the FIRST group on the next/previous distinct layer (minY),
+ * clamped at the ends. Pure; tested in step-groups.test.ts.
+ */
+export function layerJumpIndex(
+  groups: readonly StepGroup[],
+  current: number,
+  delta: number,
+): number {
+  if (groups.length === 0) return 0;
+  const cur = Math.min(Math.max(current, 0), groups.length - 1);
+  const y = groups[cur]!.minY;
+  if (delta > 0) {
+    for (let i = cur + 1; i < groups.length; i++) {
+      if (groups[i]!.minY !== y) return i;
+    }
+    return groups.length - 1;
+  }
+  if (delta < 0) {
+    let i = cur - 1;
+    while (i >= 0 && groups[i]!.minY === y) i--;
+    if (i < 0) return 0;
+    const ny = groups[i]!.minY;
+    while (i > 0 && groups[i - 1]!.minY === ny) i--;
+    return i;
+  }
+  return cur;
+}
+
 /** Ingredients for the step card: "M× <type> — laag y=Y — pos (x1..x2, z1..z2)". */
 export interface StepCard {
   count: number;

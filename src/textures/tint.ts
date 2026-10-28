@@ -1,8 +1,7 @@
 /**
- * Fixed biome-tint table (phase 4b): real biome coloring is out of scope,
- * so grayscale-tinted vanilla textures get their **plains-biome** color —
- * grass → 0x91BD59, foliage → 0x77AB2F, matching the vanilla colormap
- * defaults. Birch/spruce leaves have fixed vanilla colors of their own.
+ * Fixed tint table (phase 4b): grayscale vanilla textures get their
+ * plains-biome / hardcoded-multiplier color — grass → 0x91BD59, foliage →
+ * 0x77AB2F, redstone dust → 0xFF0000, water → 0x3F76E4 (overworld default), Birch/spruce leaves have fixed vanilla colors of their own.
  *
  * Applied as material color multiplier, so it tints the whole block, not
  * just its grayscale faces — documented approximation (README).
@@ -10,8 +9,18 @@
 
 const GRASS = 0x91bd59;
 const FOLIAGE = 0x77ab2f;
+/** Vanilla's hardcoded redstone tint (grayscale dust texture × red). */
+const REDSTONE = 0xff0000;
+/** Default overworld water colour (water_still is grayscale in the jar). */
+const WATER = 0x3f76e4;
 
 export const BIOME_TINTS: Record<string, number> = {
+  'minecraft:redstone_wire': REDSTONE,
+  'minecraft:water': WATER,
+  'minecraft:bubble_column': WATER,
+  'minecraft:kelp': WATER,
+  'minecraft:seagrass': WATER,
+  'minecraft:tall_seagrass': WATER,
   'minecraft:grass_block': GRASS,
   'minecraft:grass': GRASS,
   'minecraft:tall_grass': GRASS,

@@ -5,6 +5,7 @@ import {
   JUMP_THRESHOLD,
   groupSteps,
   jumpInfo,
+  layerJumpIndex,
   stepCard,
 } from '../src/slicer/step-groups.js';
 import type { BuildBlock } from '../src/slicer/build-order.js';
@@ -109,5 +110,42 @@ describe('stepCard', () => {
     expect(card.count).toBe(3);
     expect(card.types).toEqual([{ name: 'oak_planks', count: 2 }, { name: 'stone', count: 1 }]);
     expect(card).toMatchObject({ y: 0, x1: 0, x2: 1, z1: 0, z2: 1 });
+  });
+});
+
+describe('per-block granularity', () => {
+  it('cap per-block gives exactly one group per block, each count 1', () => {
+    const blocks = [b(0, 0, 0), b(1, 0, 0), b(1, 0, 1), b(5, 2, 2)];
+    const groups = groupSteps(blocks, { cap: 'per-block' });
+    expect(groups.length).toBe(4);
+    for (const g of groups) expect(g.count).toBe(1);
+    expect(groups.map((g) => g.first)).toEqual([0, 1, 2, 3]);
+  });
+});
+
+describe('layerJumpIndex — guide layer-wise jumps', () => {
+  // six mutually non-adjacent blocks -> six groups:
+  // y=0 indices 0,1; y=3 indices 2,3,4; y=7 index 5
+  const groups = groupSteps([
+    b(0, 0, 0), b(3, 0, 0),
+    b(0, 3, 0), b(3, 3, 0), b(6, 3, 0),
+    b(1, 7, 1),
+  ]);
+  it('moves to the first group of the next distinct layer', () => {
+    expect(layerJumpIndex(groups, 0, +1)).toBe(2);
+    expect(layerJumpIndex(groups, 3, +1)).toBe(5);
+  });
+  it('moves to the first group of the previous distinct layer', () => {
+    expect(layerJumpIndex(groups, 2, -1)).toBe(0);
+    expect(layerJumpIndex(groups, 5, -1)).toBe(2);
+  });
+  it('clamps at both ends', () => {
+    expect(layerJumpIndex(groups, 5, +1)).toBe(5);
+    expect(layerJumpIndex(groups, 0, -1)).toBe(0);
+  });
+  it('stays put on delta 0 and clamps out-of-range current', () => {
+    expect(layerJumpIndex(groups, 2, 0)).toBe(2);
+    expect(layerJumpIndex(groups, 99, +1)).toBe(5);
+    expect(layerJumpIndex([], 0, +1)).toBe(0);
   });
 });

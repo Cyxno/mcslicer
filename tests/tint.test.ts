@@ -11,6 +11,14 @@ describe('biome tint table (fixed plains values)', () => {
     expect(tintForBlock('minecraft:cherry_leaves')).toBe(0xffffff);
   });
 
+  it('tints grayscale non-biome textures: redstone dust red, water blue', () => {
+    // redstone_wire renders grayscale in the jar; vanilla multiplies a
+    // hardcoded red. Without this the dust renders black/white.
+    expect(tintForBlock('minecraft:redstone_wire[east=none,north=side,south=side,west=up]')).toBe(0xff0000);
+    expect(tintForBlock('minecraft:water[level=0]')).toBe(0x3f76e4);
+    expect(tintForBlock('minecraft:bubble_column')).toBe(0x3f76e4);
+  });
+
   it('returns null for untinted blocks and unknown ids', () => {
     expect(tintForBlock('minecraft:stone')).toBeNull();
     expect(tintForBlock('minecraft:furnace[facing=north,lit=true]')).toBeNull();

@@ -46,6 +46,7 @@ import { orderBlocks, type BuildBlock } from '../slicer/build-order.js';
 import {
   groupSteps,
   jumpInfo,
+  layerJumpIndex,
   stepCard,
   type CapOption,
   type StepGroup,
@@ -773,7 +774,9 @@ export class Viewer {
         // Fixed biome tint (plains) on grayscale-tinted types; white keeps
         // the raw texture. Dimming multiplies the same tint per layer.
         const tint = tintForBlock(block);
-        this.brightMats.push(new MeshLambertMaterial({ map: this.atlasTexture, color: tint ?? 0xffffff }));
+        // alphaTest cuts out transparent texels (redstone dust, rails,
+        // torches): without it the transparent background renders black.
+        this.brightMats.push(new MeshLambertMaterial({ map: this.atlasTexture, color: tint ?? 0xffffff, alphaTest: 0.5 }));
       } else {
         const geom = geometryForType(block);
         this.texturedGeoms.push(geom); // shared disposal list (misnomer: all per-type geoms)
@@ -848,10 +851,11 @@ export class Viewer {
       ` · formaat: ${FORMAT_LABELS[schem.format]}` +
       (this.lastTextureReport ? ` · textures: ${this.lastTextureReport}` : ''),
     );
-    // The guide, when on, restarts on the new model.
+    // The guide, when on, restarts on the new model (full state reset).
     if (this.guideMode) {
       this.buildGuideMeshes();
       this.setGuideStep(0);
+      this.syncSlider();
     }
   }
 
@@ -934,7 +938,7 @@ export class Viewer {
     this.hiddenTypes.clear();
     this.applyTypeMaterials();
     this.refreshMaterials();
-    this.setStep(0);
+    if (!this.guideMode) this.setStep(0);
   }
 
   /** Ground grid visibility (Display toolbar toggle). */
@@ -1139,11 +1143,30 @@ export class Viewer {
     });
   }
 
-  /** Slider input: land on the first step of the chosen slice index. */
+  /** Slider input: guide mode → step chooser; slicer mode → first step of
+   * the chosen slice. ONE navigation switch so buttons, keyboard and slider
+   * can never desync (the "Next Step werkt niet" bug: first/last/slider
+   * still drove the slicer state while arrows drove the guide). */
   setSliceIndex(index: number): void {
-    if (!this.model || this.model.slices.length === 0) return;
+    if (!this.model) return;
+    if (this.guideMode) {
+      if (this.groups.length > 0) this.setGuideStep(index);
+      return;
+    }
+    if (this.model.slices.length === 0) return;
     const clamped = Math.min(Math.max(index, 0), this.model.slices.length - 1);
     this.setStep(this.model.slices[clamped]!.firstStep);
+  }
+
+  /** First/last step on the ACTIVE mode's timeline (guide or slicer). */
+  stepFirst(): void {
+    if (this.guideMode) this.setGuideStep(0);
+    else this.setStep(0);
+  }
+
+  stepLast(): void {
+    if (this.guideMode) this.setGuideStep(Number.MAX_SAFE_INTEGER);
+    else this.setStep(Number.MAX_SAFE_INTEGER);
   }
 
   setStep(step: number): void {
@@ -1197,6 +1220,26 @@ export class Viewer {
         this.progress.textContent = progressLabel(this.model, this.state);
       }
     }
+    this.syncSlider();
+  }
+
+  /** Slider range follows the active mode: guide steps in guide mode,
+   * slices in slicer mode — one control, one timeline (4i nav fix). */
+  private syncSlider(): void {
+    if (this.guideMode && this.groups.length > 0) {
+      this.slider.min = '0';
+      this.slider.max = String(this.groups.length - 1);
+      this.slider.value = String(this.guideStep);
+      this.slider.disabled = this.groups.length <= 1;
+    } else {
+      const slices = this.model?.slices ?? [];
+      this.slider.min = '0';
+      this.slider.max = String(Math.max(slices.length - 1, 0));
+      this.slider.value = String(Math.min(this.sliceIndex(this.sliceCoord), Math.max(slices.length - 1, 0)));
+      this.slider.disabled = slices.length <= 1;
+    }
+    const ticks = document.getElementById('layer-ticks');
+    if (ticks) ticks.style.visibility = this.guideMode ? 'hidden' : 'visible';
   }
 
   /** One InstancedMesh per (guide step × type), reusing the per-type geometries. */
@@ -1240,6 +1283,9 @@ export class Viewer {
   setGuideStep(step: number): void {
     if (this.groups.length === 0) return;
     this.guideStep = Math.min(Math.max(step, 0), this.groups.length - 1);
+    this.slider.value = String(this.guideStep);
+    const label = document.getElementById('layer-label');
+    if (label) label.textContent = `stap ${this.guideStep + 1}/${this.groups.length}`;
     this.applyGuideMaterials();
     this.updateGuideHud();
     if (this.followStep) this.glideTo(this.groupCenterWorld(this.groups[this.guideStep]!));
@@ -1278,7 +1324,10 @@ export class Viewer {
     const g = this.groups[this.guideStep];
     if (!g) return;
     const n = this.groups.length;
-    this.progress.textContent = `stap ${this.guideStep + 1} van ${n} · ${g.count} blocks deze stap`;
+    const total = this.ordered.length;
+    const pct = total > 0 ? Math.round(((g.first + g.count) / total) * 100) : 0;
+    this.progress.textContent =
+      `stap ${this.guideStep + 1} / ${n} · blok ${g.first + 1}–${g.first + g.count} van ${total} (${pct}%)`;
     const card = document.getElementById('step-card');
     if (!card) return;
     const c = stepCard(g, this.ordered);
@@ -1306,6 +1355,7 @@ export class Viewer {
       this.groups.findIndex((g) => g.first <= keep && keep < g.first + g.count),
       0,
     );
+    this.syncSlider();
     if (this.guideMode) {
       this.buildGuideMeshes();
       this.applyGuideMaterials();
@@ -1314,7 +1364,13 @@ export class Viewer {
   }
 
   sliceShift(delta: number): void {
-    if (!this.model || this.model.slices.length === 0) return;
+    if (!this.model) return;
+    // Guide mode: layer-wise jump along the build order (PgUp/PgDn/Shift+scroll).
+    if (this.guideMode) {
+      if (this.groups.length > 0) this.setGuideStep(layerJumpIndex(this.groups, this.guideStep, delta));
+      return;
+    }
+    if (this.model.slices.length === 0) return;
     const idx = Math.min(Math.max(this.sliceIndex(this.sliceCoord) + delta, 0), this.model.slices.length - 1);
     const target = this.model.slices[idx]!;
     // Land on the first step of the target slice (Shulkr behaviour).
@@ -1564,9 +1620,9 @@ export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, dem
     viewer.sliceShift(delta > 0 ? +1 : -1);
   }, { capture: true, passive: false });
 
-  // Step buttons
-  $('first-btn').addEventListener('click', () => viewer.setStep(0));
-  $('last-btn').addEventListener('click', () => viewer.setStep(Number.MAX_SAFE_INTEGER));
+  // Step buttons (routes through the active mode's timeline)
+  $('first-btn').addEventListener('click', () => viewer.stepFirst());
+  $('last-btn').addEventListener('click', () => viewer.stepLast());
   $('prev-btn').addEventListener('click', () => viewer.stepPrev());
   $('next-btn').addEventListener('click', () => viewer.stepNext());
 
@@ -1587,8 +1643,8 @@ export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, dem
       case 'ArrowRight': e.preventDefault(); viewer.stepNext(); break;
       case 'PageUp': e.preventDefault(); viewer.sliceShift(+1); break;
       case 'PageDown': e.preventDefault(); viewer.sliceShift(-1); break;
-      case 'Home': e.preventDefault(); viewer.setStep(0); break;
-      case 'End': e.preventDefault(); viewer.setStep(Number.MAX_SAFE_INTEGER); break;
+      case 'Home': e.preventDefault(); viewer.stepFirst(); break;
+      case 'End': e.preventDefault(); viewer.stepLast(); break;
     }
   });
 

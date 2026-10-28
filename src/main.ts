@@ -8,6 +8,28 @@ const canvas = document.getElementById('viewer') as HTMLCanvasElement;
 const status = document.getElementById('status')!;
 const viewer = initViewer(canvas, status, demoUrl);
 
+// Deep-link: ?file=<naam>.schem (relative to base), ?guide=1, ?step=N.
+// Same-origin only — the value is joined against document.baseURI and may
+// not escape it.
+const params = new URLSearchParams(location.search);
+const deepFile = params.get('file');
+if (deepFile && !deepFile.includes('..') && deepFile.endsWith('.schem')) {
+  void (async () => {
+    try {
+      const bytes = new Uint8Array(await (await fetch(new URL(deepFile, document.baseURI))).arrayBuffer());
+      await viewer.loadFile(bytes, deepFile);
+      if (params.get('guide') === '1') viewer.setGuideMode(true);
+      const step = Number(params.get('step'));
+      if (Number.isInteger(step) && step >= 0) {
+        if (params.get('guide') === '1') viewer.setGuideStep(step);
+        else viewer.setStep(step);
+      }
+    } catch (err) {
+      viewer.setStatus(err instanceof Error ? err.message : String(err), true);
+    }
+  })();
+}
+
 // Phase 4a: the user points at their own assets (directory or pack zip).
 // Everything is read client-side in memory; nothing is uploaded.
 const dirInput = document.getElementById('assets-dir') as HTMLInputElement;

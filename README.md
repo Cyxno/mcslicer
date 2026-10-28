@@ -124,9 +124,10 @@ crashing.
 
 **Known limitations:** face selection is heuristic over texture keys
 (`all`/`side`/`top`/`end`/…); per-face UVs inside model `elements[]` are
-not read; biome tinting is approximated with **fixed plains-biome
-colors** applied to the whole block (`src/textures/tint.ts`: grass
-0x91BD59, foliage 0x77AB2F, fixed birch/spruce leaf colors) — real
+not read; tinting is approximated with **fixed colors** applied to
+the whole block (`src/textures/tint.ts`: grass
+0x91BD59, foliage 0x77AB2F, redstone dust 0xFF0000, water 0x3F76E4,
+fixed birch/spruce leaf colors) — real
 per-face, per-biome coloring is out of scope; animated textures use
 their first frame. The material panel
 swatches stay color-based.

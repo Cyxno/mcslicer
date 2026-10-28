@@ -5,3 +5,5 @@ dist/
 # default textures are operator-supplied (Mojang assets may not be
 # redistributed) — see README, scripts/prepare-default-assets.sh
 public/default-assets/
+zip/
+scripts/texture-pack-*.zip
