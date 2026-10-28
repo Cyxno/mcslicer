@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "lint": "eslint .",
     "gen:fixture": "tsx scripts/gen-fixture.ts",
-    "gen:phantom-fixture": "tsx scripts/gen-phantom-fixture.ts"
+    "gen:phantom-fixture": "tsx scripts/gen-phantom-fixture.ts",
+    "report:build-order": "tsx scripts/build-order-demo.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9",
