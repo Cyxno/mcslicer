@@ -72,6 +72,8 @@
       }
       #hud { top: 12px; left: 12px; font-variant-numeric: tabular-nums; }
       #hud b { color: var(--text); font-weight: 600; }
+      #dim-legend { top: 46px; left: 12px; font-variant-numeric: tabular-nums; }
+      #dim-legend b { color: #cfe0ff; font-weight: 600; font-family: var(--mono); }
       #slice-banner {
         top: 12px; left: 50%; transform: translateX(-50%);
         display: flex; gap: 10px; align-items: center; white-space: nowrap;
@@ -145,6 +147,18 @@
       .nav-btn:hover { border-color: var(--accent); }
       .nav-btn.active { background: var(--accent-soft); border-color: var(--accent); }
       #progress { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+      #step-card {
+        display: inline-flex; gap: 8px; align-items: baseline; cursor: pointer;
+        background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px;
+        padding: 3px 10px; font-size: 12.5px; color: var(--text);
+      }
+      #step-card:hover { border-color: var(--accent); }
+      #step-card .sc-jump { color: #ffb347; font-size: 11.5px; }
+      #step-card .sc-dim { color: var(--text-faint); font-size: 11.5px; }
+      #assets-pop select {
+        background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+        border-radius: 6px; padding: 3px 6px; font-size: 12.5px; font-family: var(--font);
+      }
       /* ---- hints ---- */
       #hints {
         grid-column: 1 / 3; padding: 5px 14px; background: var(--bg); color: var(--text-faint);
@@ -223,6 +237,17 @@
             <button id="assets-zip-btn" class="btn">Zip…</button>
           </div>
           <p id="texture-report"></p>
+          <h3>Bouwgids</h3>
+          <div class="row">
+            <label for="guide-cap">Blocks per stap:</label>
+            <select id="guide-cap">
+              <option value="4">4</option>
+              <option value="8" selected>8</option>
+              <option value="12">12</option>
+              <option value="24">24</option>
+              <option value="per-block">per blok</option>
+            </select>
+          </div>
         </div>
         <input id="assets-dir" class="hidden-input" type="file" webkitdirectory multiple />
         <input id="assets-zip" class="hidden-input" type="file" accept=".zip,application/zip" />
@@ -230,6 +255,7 @@
       <div id="canvas-wrap">
         <canvas id="viewer"></canvas>
         <div id="hud" class="overlay" hidden></div>
+        <div id="dim-legend" class="overlay" hidden></div>
         <div id="slice-banner" class="overlay" hidden>
           <span id="slice-banner-text"></span>
           <button id="slice-banner-clear" class="link">Wis slice</button>
@@ -249,7 +275,10 @@
         <div id="bottom-toolbar">
           <button class="tb tb-label active" id="cam-orbit" title="Orbit-weergave">Orbit</button>
           <button class="tb tb-label" id="cam-plan" title="Plan-weergave (top-down)">Plan</button>
+          <button class="tb tb-label" id="cam-explore" title="Explore — vrij vliegen (klik = muis grijpen, WASD + Space/Shift, Esc = los)">Explore</button>
+          <button class="tb tb-label" id="btn-noclip" title="Noclip (door blokken vliegen) — aan/uit" hidden>noclip</button>
           <span class="sep"></span>
+          <button class="tb tb-label" id="btn-guide" title="Bouwgids — stappen langs de bouwvolgorde (G)">Gids</button>
           <button class="tb" id="btn-slice" title="Naar de laagkiezer">🪚</button>
           <button class="tb tb-label" id="btn-slice-mode" title="Laagweergave: cumulatief (toon t/m laag N) — klik om te isoleren">Σ</button>
           <span id="slice-mode-label" class="tb tb-label">t/m laag</span>
@@ -283,6 +312,7 @@
         <button class="nav-btn" id="next-btn" title="Volgende stap (→)">▶</button>
         <button class="nav-btn" id="last-btn" title="Laatste stap (End)">⏭</button>
         <span id="progress"></span>
+        <span id="step-card" hidden title="Klik = camera naar deze stap"></span>
         <span class="spacer"></span>
         <span id="status"></span>
       </div>
@@ -291,9 +321,11 @@
         <kbd>PgUp</kbd>/<kbd>PgDn</kbd> laag ·
         <kbd>Shift</kbd>+scroll laag ·
         <kbd>Home</kbd>/<kbd>End</kbd> eerste/laatste ·
+        <kbd>G</kbd> bouwgids aan/uit ·
         <kbd>H</kbd> verberg gekozen type ·
         <kbd>Esc</kbd> paneel dicht ·
         muis-slepen = orbit, scroll = zoom, laagkiezer-fokus + pijltjes = laag · klik op een blok voor info ·
+        Explore: klik = muis grijpen, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>Space</kbd>/<kbd>Shift</kbd>, <kbd>Esc</kbd> = los ·
         sleep een <kbd>.schem</kbd> op het canvas
       </div>
     </div>

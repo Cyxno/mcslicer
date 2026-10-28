@@ -19,6 +19,7 @@ import {
   CanvasTexture,
   Color,
   DirectionalLight,
+  Euler,
   GridHelper,
   Group,
   InstancedMesh,
@@ -28,8 +29,11 @@ import {
   MeshLambertMaterial,
   NearestFilter,
   OrthographicCamera,
+  PerspectiveCamera,
   Raycaster,
   Scene,
+  Sprite,
+  SpriteMaterial,
   Vector2,
   Vector3,
   WebGLRenderer,
@@ -38,6 +42,16 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { parseSchem } from '../schem/parse.js';
 import { FORMAT_LABELS } from '../schem/types.js';
 import type { Schematic } from '../schem/types.js';
+import { orderBlocks, type BuildBlock } from '../slicer/build-order.js';
+import {
+  groupSteps,
+  jumpInfo,
+  stepCard,
+  type CapOption,
+  type StepGroup,
+} from '../slicer/step-groups.js';
+import { thinQuadFor } from '../render/thin-quads.js';
+import { exploreParams } from '../render/explore.js';
 import {
   buildSlicerModel,
   currentSlice,
@@ -57,7 +71,7 @@ import { layerOpacity } from '../slicer/layer-opacity.js';
 import { baseTypeName, materialTable, sortRows, type MaterialRow, type SortDir, type SortKey } from '../slicer/materials.js';
 import { colorForBlock } from '../render/colors.js';
 import { framingForStep } from '../render/framing.js';
-import { blockCenterLocal, fitScale, gridSpan, modelMatrix, worldToBlock } from '../render/transform.js';
+import { blockCenterLocal, fitScale, gridSpan, localToWorld, modelMatrix, worldToBlock } from '../render/transform.js';
 import { blockInfo, pointerToNdc, toggleValue } from '../render/picking.js';
 import { resolveBlockstate } from '../textures/atlas.js';
 import { boxFaceUVs } from '../textures/faces.js';
@@ -68,6 +82,32 @@ import { chooseSource, resolveForRender, atlasReportLine, sourceStatusLine, type
 import { pendingPaths, treeFromRemote, createRemoteSource, wantedPathsForPalette, type RemoteSource } from '../textures/remote.js';
 
 const BLOCK = new BoxGeometry(1, 1, 1);
+
+/** Amber accent of the current guide step (matches the old marker color). */
+const AMBER = new Color(0xffb347);
+
+/**
+ * Geometry for one palette type: a full cube, or — for known-flat types
+ * (the "black hoppers" set, 4h E) — a thin slab / two-sided vertical plane
+ * at the height and orientation from the palette blockstate. Pure mapping
+ * lives in render/thin-quads; this only builds the three.js geometry.
+ */
+function geometryForType(block: string): BufferGeometry {
+  const spec = thinQuadFor(block);
+  if (!spec) return BLOCK.clone();
+  const g = spec.kind === 'flat'
+    ? new BoxGeometry(1, 0.05, 1)
+    : new BoxGeometry(1, 0.9, 0.05);
+  if (spec.kind === 'flat') {
+    g.translate(0, spec.y - 0.5, 0);
+    g.rotateY(spec.rotY);
+  } else {
+    // The box's thin axis (z) must align with the quad normal.
+    g.rotateY(Math.atan2(spec.normal.x, spec.normal.z));
+    g.translate(spec.normal.x * spec.offset, spec.y - 0.5, spec.normal.z * spec.offset);
+  }
+  return g;
+}
 
 interface SliceMesh {
   mesh: InstancedMesh;
@@ -104,7 +144,17 @@ export class Viewer {
   private texturedGeoms: BufferGeometry[] = [];
   /** Subtle ground grid under the model (Shulkr-style), rebuilt per model. */
   private grid: GridHelper | null = null;
-  private cameraMode: 'orbit' | 'plan' = 'orbit';
+  /** Orbit/plan share the orthographic camera; explore has its own perspective. */
+  private cameraMode: 'orbit' | 'plan' | 'explore' = 'orbit';
+  private readonly expCam: PerspectiveCamera;
+  private expYaw = 0;
+  private expPitch = 0;
+  private readonly expKeys = new Set<string>();
+  private expLocked = false;
+  private noclip = true;
+  private lastFrame = performance.now();
+  /** Plan-mode axis labels (N/W) parented under the model transform. */
+  private planLabels: Sprite[] = [];
   /** Current group transform (scale + centering), reused by framing. */
   private groupTransform: Matrix4 | null = null;
   private modelScale = 1;
@@ -126,14 +176,23 @@ export class Viewer {
   private sortKey: SortKey = 'total';
   private sortDir: SortDir = 'desc';
 
+  // Bouwgids (4h D): blocks ordered for building, grouped into steps.
+  private guideMode = false;
+  private guideStep = 0;
+  private guideCap: CapOption = 8;
+  private ordered: BuildBlock[] = [];
+  private groups: StepGroup[] = [];
+  private guideMeshes: Array<{ mesh: InstancedMesh; group: number; paletteIndex: number; base: Color }> = [];
+  /** Per-type geometries from the last showSlicer (shared with guide meshes). */
+  private typeGeometry = new Map<number, BufferGeometry>();
+
   // Picking state (phase 4b). Highlight = one type forced bright across
   // all slices; hide = type's meshes invisible and its panel row dimmed.
   private readonly raycaster = new Raycaster();
   private readonly pointerNDC = new Vector2();
-  /** Overlays (hover, step marker, grid) in model space, under one transform. */
+  /** Overlays (hover, plan labels, grid) in model space, under one transform. */
   private readonly modelGroup = new Group();
   private readonly hoverBox: Mesh;
-  private readonly stepMarker: Mesh;
   private typeToSlot = new Map<number, number>();
   private totals = new Map<number, number>();
   private hiddenTypes = new Set<number>();
@@ -193,16 +252,13 @@ export class Viewer {
     this.hoverBox.visible = false;
     this.modelGroup.add(this.hoverBox);
 
-    // Current-step marker (4e C): amber shell in the same model-space
-    // style as the hover box, distinct color so the step stands out.
-    this.stepMarker = new Mesh(
-      new BoxGeometry(1, 1, 1),
-      new MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.32, depthWrite: false }),
-    );
-    this.stepMarker.visible = false;
-    this.modelGroup.add(this.stepMarker);
+    // Explore camera (4h F): perspective, fov/speed scale with the model.
+    this.expCam = new PerspectiveCamera(70, aspect, 0.05, 4000);
+    this.expCam.position.set(30, 30, 30);
 
-    canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
+    canvas.addEventListener('pointermove', (e) => {
+      if (!this.expLocked) this.onPointerMove(e);
+    });
     // Leaving the canvas must never leave a stale hover box behind (the 4d
     // "losse grijze blok" report): hide it as soon as the pointer is gone.
     canvas.addEventListener('pointerleave', () => {
@@ -216,14 +272,47 @@ export class Viewer {
       this.pointerDownAt = null;
       if (!down) return;
       const moved = Math.abs(e.clientX - down.x) + Math.abs(e.clientY - down.y);
-      if (moved <= 4) this.onPick(e); // click, not orbit-drag
+      if (moved > 4) return;
+      if (this.cameraMode === 'explore') {
+        if (!this.expLocked) this.renderer.domElement.requestPointerLock?.(); // re-grab the mouse
+      } else {
+        this.onPick(e);
+      }
     });
+
+    // Explore (4h F): click grabs the pointer, Esc releases it (browser).
+    // Mouse look while locked; WASD/Space/Shift tracked for the frame loop.
+    document.addEventListener('pointerlockchange', () => {
+      this.expLocked = document.pointerLockElement === canvas;
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!this.expLocked) return;
+      this.expYaw -= e.movementX * 0.0024;
+      this.expPitch = Math.min(Math.max(this.expPitch - e.movementY * 0.0024, -Math.PI / 2 + 0.01), Math.PI / 2 - 0.01);
+    });
+    const trackKeys = (e: KeyboardEvent, on: boolean): void => {
+      if (this.cameraMode !== 'explore') return;
+      if (e.code === 'KeyW' || e.code === 'KeyA' || e.code === 'KeyS' || e.code === 'KeyD' ||
+          e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+        e.preventDefault();
+        if (on) this.expKeys.add(e.code);
+        else this.expKeys.delete(e.code);
+      }
+    };
+    window.addEventListener('keydown', (e) => trackKeys(e, true));
+    window.addEventListener('keyup', (e) => trackKeys(e, false));
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
 
     const loop = (): void => {
-      if (this.camAnim) {
+      const now = performance.now();
+      const dt = Math.min((now - this.lastFrame) / 1000, 0.1);
+      this.lastFrame = now;
+      if (this.cameraMode === 'explore') {
+        this.exploreTick(dt);
+        this.renderer.render(this.scene, this.expCam);
+      } else if (this.camAnim) {
         // Follow-step glide (4e C): shift camera and target by the same
         // delta so zoom and orbit orientation are preserved.
         const a = this.camAnim;
@@ -236,13 +325,40 @@ export class Viewer {
           this.camAnim = null;
           this.controls.update();
         }
+        this.renderer.render(this.scene, this.camera);
       } else {
         this.controls.update();
+        this.renderer.render(this.scene, this.camera);
       }
-      this.renderer.render(this.scene, this.camera);
       requestAnimationFrame(loop);
     };
     loop();
+  }
+
+  /** One explore frame: pointer-look orientation + WASD/Space/Shift move. */
+  private exploreTick(dt: number): void {
+    const p = this.schem ? exploreParams(this.schem.size) : { moveSpeed: 4, fov: 70 };
+    const k = this.expKeys;
+    const fwd = (k.has('KeyW') ? 1 : 0) - (k.has('KeyS') ? 1 : 0);
+    const strafe = (k.has('KeyD') ? 1 : 0) - (k.has('KeyA') ? 1 : 0);
+    const rise = (k.has('Space') ? 1 : 0) - (k.has('ShiftLeft') || k.has('ShiftRight') ? 1 : 0);
+    if (fwd || strafe || rise) {
+      const cos = Math.cos(this.expPitch);
+      const dir = new Vector3(
+        -Math.sin(this.expYaw) * cos * fwd + Math.cos(this.expYaw) * strafe,
+        Math.sin(this.expPitch) * fwd + rise,
+        -Math.cos(this.expYaw) * cos * fwd - Math.sin(this.expYaw) * strafe,
+      );
+      this.expCam.position.addScaledVector(dir, p.moveSpeed * dt);
+    }
+    if (!this.noclip && this.groupTransform && this.schem) {
+      // crude collision: clamp into the model bbox inflated by one block
+      const s = this.schem.size;
+      const min = new Vector3(-1, 0.2, -1).applyMatrix4(this.groupTransform);
+      const max = new Vector3(s.x + 1, s.y + 1, s.z + 1).applyMatrix4(this.groupTransform);
+      this.expCam.position.clamp(min, max);
+    }
+    this.expCam.quaternion.setFromEuler(new Euler(this.expPitch, this.expYaw, 0, 'YXZ'));
   }
 
   /** Start a short eased glide of camera+target towards a new framing. */
@@ -261,7 +377,10 @@ export class Viewer {
   /** Toggle "volg stap"; enabling frames the current step immediately. */
   setFollowStep(on: boolean): void {
     this.followStep = on;
-    if (on && this.model && this.model.total > 0 && this.schem) {
+    if (!on || !this.schem) return;
+    if (this.guideMode && this.groups.length > 0) {
+      this.glideTo(this.groupCenterWorld(this.groups[Math.min(this.guideStep, this.groups.length - 1)]!));
+    } else if (this.model && this.model.total > 0) {
       const step = this.model.steps[this.state.step];
       if (step) this.glideTo(this.stepFraming(step));
     }
@@ -271,12 +390,6 @@ export class Viewer {
     if (!this.schem) return new Vector3();
     const f = framingForStep(step, this.schem.size);
     return new Vector3(f.x, f.y, f.z);
-  }
-
-  /** Place the amber current-step marker on the given step. */
-  private updateStepMarker(step: { x: number; y: number; z: number }): void {
-    this.stepMarker.position.copy(blockCenterLocal(step));
-    this.stepMarker.visible = true;
   }
 
   private resize(): void {
@@ -292,6 +405,8 @@ export class Viewer {
     this.camera.top = halfH;
     this.camera.bottom = -halfH;
     this.camera.updateProjectionMatrix();
+    this.expCam.aspect = aspect;
+    this.expCam.updateProjectionMatrix();
   }
 
   setStatus(message: string, isError = false): void {
@@ -320,7 +435,14 @@ export class Viewer {
     this.sliceMeshes = [];
     this.brightMats = [];
     this.texturedGeoms = [];
-    this.stepMarker.visible = false;
+    this.typeGeometry.clear();
+    this.disposeGuideMeshes();
+    for (const s of this.planLabels) {
+      s.material.map?.dispose();
+      s.material.dispose();
+      this.modelGroup.remove(s);
+    }
+    this.planLabels = [];
   }
 
   /**
@@ -496,12 +618,35 @@ export class Viewer {
     this.controls.update();
   }
 
-  /** Orbit (perspective-ish orbit) or Plan (top-down ortho) view. */
-  setCameraMode(mode: 'orbit' | 'plan'): void {
+  /** Orbit, Plan (top-down ortho) or Explore (pointer-locked free flight). */
+  setCameraMode(mode: 'orbit' | 'plan' | 'explore'): void {
     this.cameraMode = mode;
-    if (this.schem) {
-      this.frameModel(this.modelScale, this.schem.size);
+    if (mode === 'explore') {
+      // Launch from wherever the current view is looking.
+      this.expCam.position.copy(this.camera.position);
+      const dir = new Vector3().subVectors(this.controls.target, this.camera.position).normalize();
+      this.expYaw = Math.atan2(-dir.x, -dir.z);
+      this.expPitch = Math.asin(Math.min(Math.max(dir.y, -1), 1));
+      const p = this.schem ? exploreParams(this.schem.size) : { moveSpeed: 4, fov: 70 };
+      this.expCam.fov = p.fov;
+      this.expCam.updateProjectionMatrix();
+      this.controls.enabled = false;
+      this.camAnim = null;
+      this.renderer.domElement.requestPointerLock?.();
+    } else {
+      this.controls.enabled = true;
+      this.expKeys.clear();
+      if (document.pointerLockElement) document.exitPointerLock();
+      if (this.schem) {
+        this.frameModel(this.modelScale, this.schem.size);
+      }
     }
+    for (const s of this.planLabels) s.visible = mode === 'plan';
+  }
+
+  /** Noclip (fly through blocks) — default on; off clamps into the bbox. */
+  setNoclip(on: boolean): void {
+    this.noclip = on;
   }
 
   /** Parse bytes and display in slicer mode; all failures are visible. */
@@ -536,6 +681,11 @@ export class Viewer {
     this.clearModel();
     this.schem = schem;
     this.model = buildSlicerModel(schem, axis);
+    // Bouwgids-basis (4h D): orderBlocks re-sorts independently of the
+    // viewing axis, so the guide is identical on every axis choice.
+    this.ordered = orderBlocks(this.model.steps);
+    this.groups = groupSteps(this.ordered, { cap: this.guideCap });
+    this.guideStep = 0;
     this.state = initialState();
     this.sliceCoord = -1;
     this.hiddenTypes.clear();
@@ -615,7 +765,7 @@ export class Viewer {
         : null;
       const uvs = rects ? boxFaceUVs(rects, fallbackRect) : null;
       if (uvs && this.atlasTexture) {
-        const geom = BLOCK.clone();
+        const geom = geometryForType(block); // thin quad for known-flat types (4h E)
         geom.setAttribute('uv', new BufferAttribute(uvs, 2));
         this.texturedGeoms.push(geom);
         typeGeometry.set(p, geom);
@@ -625,10 +775,15 @@ export class Viewer {
         const tint = tintForBlock(block);
         this.brightMats.push(new MeshLambertMaterial({ map: this.atlasTexture, color: tint ?? 0xffffff }));
       } else {
+        const geom = geometryForType(block);
+        this.texturedGeoms.push(geom); // shared disposal list (misnomer: all per-type geoms)
+        typeGeometry.set(p, geom);
         typeToSlot.set(p, this.brightMats.length);
         this.brightMats.push(new MeshLambertMaterial({ color }));
       }
     }
+    // Guide meshes (built on demand) reuse these per-type geometries.
+    this.typeGeometry = typeGeometry;
 
     const placement = new Matrix4();
     for (const g of groups.values()) {
@@ -670,6 +825,22 @@ export class Viewer {
         `${this.model.total} blocks · ${paletteIndices.length} types`;
       hud.hidden = false;
     }
+    // Dimensie-legende (4h F): onder de HUD, in mensentaal.
+    const legend = document.getElementById('dim-legend');
+    if (legend) {
+      legend.innerHTML = `X <b>${schem.size.x}</b> breed · Y <b>${schem.size.y}</b> hoog · ` +
+        `Z <b>${schem.size.z}</b> diep`;
+      legend.hidden = false;
+    }
+    // Plan-mode as-labeltjes (4h F): N op de noordrand (−z), W op de westrand.
+    for (const [text, x, z] of [['N', schem.size.x / 2, -3], ['W', -3, schem.size.z / 2]] as const) {
+      const s = this.makeLabel(text);
+      s.position.set(x, 0, z);
+      s.scale.set(3, 3, 1);
+      s.visible = this.cameraMode === 'plan';
+      this.modelGroup.add(s);
+      this.planLabels.push(s);
+    }
     const axisNames = { x: 'X', y: 'Y', z: 'Z' } as const;
     this.setStatus(
       `${schem.size.x}×${schem.size.y}×${schem.size.z} — ${this.model.total} blocks, ` +
@@ -677,6 +848,27 @@ export class Viewer {
       ` · formaat: ${FORMAT_LABELS[schem.format]}` +
       (this.lastTextureReport ? ` · textures: ${this.lastTextureReport}` : ''),
     );
+    // The guide, when on, restarts on the new model.
+    if (this.guideMode) {
+      this.buildGuideMeshes();
+      this.setGuideStep(0);
+    }
+  }
+
+  /** Text sprite for the plan-mode axis labels. */
+  private makeLabel(text: string): Sprite {
+    const c = document.createElement('canvas');
+    c.width = 64;
+    c.height = 64;
+    const ctx = c.getContext('2d')!;
+    ctx.font = 'bold 42px Inter, sans-serif';
+    ctx.fillStyle = '#9aa4b2';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 32, 34);
+    const tex = new CanvasTexture(c);
+    tex.colorSpace = 'srgb';
+    return new Sprite(new SpriteMaterial({ map: tex, transparent: true, opacity: 0.9, depthWrite: false }));
   }
 
   private sliceIndex(coord: number): number {
@@ -763,7 +955,7 @@ export class Viewer {
 
   /** Render one frame and download the canvas as PNG. */
   savePhoto(): void {
-    this.renderer.render(this.scene, this.camera);
+    this.renderer.render(this.scene, this.cameraMode === 'explore' ? this.expCam : this.camera);
     this.renderer.domElement.toBlob((blob) => {
       if (!blob) {
         this.setStatus('Screenshot mislukt', true);
@@ -789,6 +981,10 @@ export class Viewer {
    * active layer gets a subtle emissive lift so it stands out from the
    * dimmed rest without a harsh cut. */
   private applyTypeMaterials(): void {
+    if (this.guideMode) {
+      this.applyGuideMaterials();
+      return;
+    }
     for (const entry of this.sliceMeshes) {
       const hidden = this.hiddenTypes.has(entry.paletteIndex);
       entry.mesh.visible = !hidden && sliceVisible(entry.sliceCoord, this.sliceCoord, this.sliceMode);
@@ -848,7 +1044,7 @@ export class Viewer {
     // scale cancels because event and rect share the CSS pixel space).
     const ndc = pointerToNdc(e.clientX, e.clientY, rect, this.renderer.getPixelRatio());
     this.pointerNDC.set(ndc.x, ndc.y);
-    this.raycaster.setFromCamera(this.pointerNDC, this.camera);
+    this.raycaster.setFromCamera(this.pointerNDC, this.cameraMode === 'explore' ? this.expCam : this.camera);
     const meshes = this.sliceMeshes.filter((s) => s.mesh.visible).map((s) => s.mesh);
     const hits = this.raycaster.intersectObjects(meshes, false);
     const hit = hits[0];
@@ -960,18 +1156,162 @@ export class Viewer {
     const slice = currentSlice(this.model, this.state);
     if (slice && slice.coord !== this.sliceCoord) this.setSliceCoord(slice.coord);
     const cur = currentStep(this.model, this.state);
-    if (cur) {
-      this.updateStepMarker(cur);
-      if (this.followStep) this.glideTo(this.stepFraming(cur));
-    } else {
-      this.stepMarker.visible = false;
-    }
+    // The always-on step marker is gone (4h D): in slicer mode only the
+    // camera still follows; in guide mode the amber highlight IS the step.
+    if (cur && this.followStep && !this.guideMode) this.glideTo(this.stepFraming(cur));
     this.progress.textContent = progressLabel(this.model, this.state);
     this.refreshMaterials();
   }
 
-  stepNext(): void { if (this.model) this.setStep(nextStep(this.model, this.state).step); }
-  stepPrev(): void { if (this.model) this.setStep(prevStep(this.model, this.state).step); }
+  stepNext(): void {
+    if (!this.model) return;
+    if (this.guideMode) this.setGuideStep(this.guideStep + 1);
+    else this.setStep(nextStep(this.model, this.state).step);
+  }
+
+  stepPrev(): void {
+    if (!this.model) return;
+    if (this.guideMode) this.setGuideStep(this.guideStep - 1);
+    else this.setStep(prevStep(this.model, this.state).step);
+  }
+
+  // ---- Bouwgids (4h D): stappen langs de bouwvolgorde ----
+
+  toggleGuideMode(): void {
+    this.setGuideMode(!this.guideMode);
+  }
+
+  setGuideMode(on: boolean): void {
+    this.guideMode = on;
+    document.getElementById('btn-guide')?.classList.toggle('active', on);
+    if (on && this.model && this.model.total > 0) {
+      this.buildGuideMeshes();
+      this.applyGuideMaterials();
+      this.updateGuideHud();
+    } else {
+      this.disposeGuideMeshes();
+      const card = document.getElementById('step-card');
+      if (card) card.hidden = true;
+      if (!on) this.applyTypeMaterials();
+      if (this.model && this.model.total > 0) {
+        this.progress.textContent = progressLabel(this.model, this.state);
+      }
+    }
+  }
+
+  /** One InstancedMesh per (guide step × type), reusing the per-type geometries. */
+  private buildGuideMeshes(): void {
+    this.disposeGuideMeshes();
+    if (!this.groupTransform) return;
+    const placement = new Matrix4();
+    this.groups.forEach((g, gi) => {
+      const byType = new Map<number, Array<[number, number, number]>>();
+      for (let i = g.first; i < g.first + g.count; i++) {
+        const b = this.ordered[i]!;
+        const arr = byType.get(b.paletteIndex);
+        if (arr) arr.push([b.x + 0.5, b.y + 0.5, b.z + 0.5]);
+        else byType.set(b.paletteIndex, [[b.x + 0.5, b.y + 0.5, b.z + 0.5]]);
+      }
+      for (const [p, coords] of byType) {
+        const geom = this.typeGeometry.get(p) ?? BLOCK;
+        const template = this.brightMats[this.typeToSlot.get(p)!]!;
+        const mesh = new InstancedMesh(geom, template.clone(), coords.length);
+        for (let i = 0; i < coords.length; i++) {
+          const c = coords[i]!;
+          placement.makeTranslation(c[0]!, c[1]!, c[2]!);
+          mesh.setMatrixAt(i, placement);
+        }
+        mesh.applyMatrix4(this.groupTransform!);
+        this.scene.add(mesh);
+        this.guideMeshes.push({ mesh, group: gi, paletteIndex: p, base: template.color.clone() });
+      }
+    });
+  }
+
+  private disposeGuideMeshes(): void {
+    for (const entry of this.guideMeshes) {
+      this.scene.remove(entry.mesh);
+      (entry.mesh.material as MeshLambertMaterial).dispose();
+      entry.mesh.dispose();
+    }
+    this.guideMeshes = [];
+  }
+
+  setGuideStep(step: number): void {
+    if (this.groups.length === 0) return;
+    this.guideStep = Math.min(Math.max(step, 0), this.groups.length - 1);
+    this.applyGuideMaterials();
+    this.updateGuideHud();
+    if (this.followStep) this.glideTo(this.groupCenterWorld(this.groups[this.guideStep]!));
+  }
+
+  /** Cumulative build progress along the order: past full, current amber,
+   * future on the same depth gradient the layer mode uses (order-index
+   * instead of y). Reuses layerOpacity — same semantics, new axis. */
+  private applyGuideMaterials(): void {
+    for (const entry of this.guideMeshes) {
+      const hidden = this.hiddenTypes.has(entry.paletteIndex);
+      entry.mesh.visible = !hidden;
+      const mat = entry.mesh.material as MeshLambertMaterial;
+      const d = entry.group - this.guideStep;
+      if (d < 0) {
+        mat.color.copy(entry.base);
+        mat.emissive.setHex(0x000000);
+      } else if (d === 0) {
+        mat.color.copy(entry.base).lerp(AMBER, 0.55);
+        mat.emissive.setHex(0x2a1c00);
+      } else {
+        mat.color.copy(entry.base).multiplyScalar(layerOpacity(d, 'cumulative', { min: 0.18, range: 3 }));
+        mat.emissive.setHex(0x000000);
+      }
+    }
+  }
+
+  /** Local bbox centre of a group → world space (the follow/card framing). */
+  private groupCenterWorld(g: StepGroup): Vector3 {
+    const local = new Vector3((g.minX + g.maxX + 1) / 2, (g.minY + g.maxY + 1) / 2, (g.minZ + g.maxZ + 1) / 2);
+    if (!this.groupTransform) return local;
+    return localToWorld(this.groupTransform, local);
+  }
+
+  private updateGuideHud(): void {
+    const g = this.groups[this.guideStep];
+    if (!g) return;
+    const n = this.groups.length;
+    this.progress.textContent = `stap ${this.guideStep + 1} van ${n} · ${g.count} blocks deze stap`;
+    const card = document.getElementById('step-card');
+    if (!card) return;
+    const c = stepCard(g, this.ordered);
+    const types = c.types.map((t) => `${t.count}× ${t.name}`).join(' + ');
+    const next = this.groups[this.guideStep + 1];
+    const jump = next ? jumpInfo(g, next) : null;
+    card.innerHTML =
+      `stap <b>${this.guideStep + 1} van ${n}</b> — ${escapeHtml(types)}` +
+      ` — laag y=${c.y} — pos (${c.x1}..${c.x2}, ${c.z1}..${c.z2})` +
+      (jump?.jump
+        ? ` <span class="sc-jump">springt +${Math.round(jump.distance)} (Δ${fmtN(jump.dx)}, Δ${fmtN(jump.dy)}, Δ${fmtN(jump.dz)})</span>`
+        : '') +
+      ` <span class="sc-dim">· klik = focus</span>`;
+    card.hidden = false;
+    card.onclick = () => this.glideTo(this.groupCenterWorld(g));
+  }
+
+  /** Granularity switch: regroup, keep progress at the same first block. */
+  setGuideCap(cap: CapOption): void {
+    const keep = this.groups[this.guideStep]?.first ?? 0;
+    this.guideCap = cap;
+    if (!this.model || this.ordered.length === 0) return;
+    this.groups = groupSteps(this.ordered, { cap });
+    this.guideStep = Math.max(
+      this.groups.findIndex((g) => g.first <= keep && keep < g.first + g.count),
+      0,
+    );
+    if (this.guideMode) {
+      this.buildGuideMeshes();
+      this.applyGuideMaterials();
+      this.updateGuideHud();
+    }
+  }
 
   sliceShift(delta: number): void {
     if (!this.model || this.model.slices.length === 0) return;
@@ -1063,6 +1403,12 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
+/** Signed number for the jump card, compact: "+3" / "−2" / "0". */
+function fmtN(v: number): string {
+  const r = Math.round(v);
+  return r >= 0 ? `+${r}` : String(r);
+}
+
 /** Wire drag-drop, demo button and all slicer controls. No server calls. */
 export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, demoUrl?: string): Viewer {
   const $ = (id: string): HTMLElement => document.getElementById(id)!;
@@ -1091,14 +1437,31 @@ export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, dem
     });
   }
 
-  // Camera mode: Orbit (free orbit) / Plan (top-down orthographic).
-  const setCam = (mode: 'orbit' | 'plan'): void => {
+  // Camera mode: Orbit (free orbit) / Plan (top-down) / Explore (fly).
+  const setCam = (mode: 'orbit' | 'plan' | 'explore'): void => {
     viewer.setCameraMode(mode);
     document.getElementById('cam-orbit')?.classList.toggle('active', mode === 'orbit');
     document.getElementById('cam-plan')?.classList.toggle('active', mode === 'plan');
+    document.getElementById('cam-explore')?.classList.toggle('active', mode === 'explore');
+    const noclip = document.getElementById('btn-noclip');
+    if (noclip) noclip.hidden = mode !== 'explore';
   };
   document.getElementById('cam-orbit')?.addEventListener('click', () => setCam('orbit'));
   document.getElementById('cam-plan')?.addEventListener('click', () => setCam('plan'));
+  document.getElementById('cam-explore')?.addEventListener('click', () => setCam('explore'));
+  $('btn-noclip')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget as HTMLElement;
+    const on = !btn.classList.contains('active');
+    btn.classList.toggle('active', on);
+    viewer.setNoclip(!on); // active badge = noclip UIT (botsing aan)
+  });
+
+  // Bouwgids: stappen langs de bouwvolgorde; granulariteit in Instellingen.
+  $('btn-guide')?.addEventListener('click', () => viewer.toggleGuideMode());
+  $('guide-cap')?.addEventListener('change', (e) => {
+    const v = (e.target as HTMLSelectElement).value;
+    viewer.setGuideCap(v === 'per-block' ? 'per-block' : Number(v) as CapOption);
+  });
 
   // Bottom-center toolbar + settings popover.
   const assetsPop = $('assets-pop');
@@ -1218,6 +1581,7 @@ export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, dem
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
     switch (e.key) {
       case 'Escape': viewer.closeInfoPanel(); break;
+      case 'g': case 'G': viewer.toggleGuideMode(); break;
       case 'h': case 'H': viewer.hidePicked(); break;
       case 'ArrowLeft': e.preventDefault(); viewer.stepPrev(); break;
       case 'ArrowRight': e.preventDefault(); viewer.stepNext(); break;
