@@ -3,6 +3,7 @@ import {
   CAP_OPTIONS,
   DEFAULT_CAP,
   JUMP_THRESHOLD,
+  ROW_CAP,
   groupSteps,
   jumpInfo,
   layerJumpIndex,
@@ -15,9 +16,9 @@ function b(x: number, y: number, z: number, block = 'minecraft:stone'): BuildBlo
 }
 
 describe('groupSteps — invariants', () => {
-  it('default cap is 12; offered caps are 4/8/12/24/per-block', () => {
+  it('default cap is 12; offered caps are 4/8/12/24/row/per-block', () => {
     expect(DEFAULT_CAP).toBe(12);
-    expect(CAP_OPTIONS).toEqual([4, 8, 12, 24, 'per-block']);
+    expect(CAP_OPTIONS).toEqual([4, 8, 12, 24, 'row', 'per-block']);
   });
 
   it('sum of group counts equals the total; groups tile the order monotonically', () => {
@@ -31,7 +32,8 @@ describe('groupSteps — invariants', () => {
         expect(g.first).toBe(cursor);
         expect(g.index).toBe(groups.indexOf(g));
         cursor += g.count;
-        expect(g.count).toBeLessThanOrEqual(cap === 'per-block' ? 1 : cap);
+        const limit = cap === 'per-block' ? 1 : cap === 'row' ? ROW_CAP : cap;
+        expect(g.count).toBeLessThanOrEqual(limit);
       }
       expect(cursor).toBe(blocks.length);
     }
@@ -147,5 +149,53 @@ describe('layerJumpIndex — guide layer-wise jumps', () => {
     expect(layerJumpIndex(groups, 2, 0)).toBe(2);
     expect(layerJumpIndex(groups, 99, +1)).toBe(5);
     expect(layerJumpIndex([], 0, +1)).toBe(0);
+  });
+});
+
+describe("groupSteps cap 'row' — rij voor rij", () => {
+  it('groups one raster row (same y and z) per step', () => {
+    const blocks = [b(0, 0, 0), b(1, 0, 0), b(2, 0, 0), b(0, 0, 1), b(1, 0, 1)];
+    const groups = groupSteps(blocks, { cap: 'row' });
+    expect(groups.map((g) => g.count)).toEqual([3, 2]);
+    expect(groups[0]).toMatchObject({ minY: 0, minZ: 0, maxX: 2 });
+    expect(groups[1]).toMatchObject({ minZ: 1 });
+  });
+
+  it('moves to the next row across a layer boundary (gap rows are skipped naturally)', () => {
+    const blocks = [
+      b(0, 0, 0),
+      b(0, 2, 0), // layer y=1 is empty
+      b(0, 3, 5),
+    ];
+    const groups = groupSteps(blocks, { cap: 'row' });
+    expect(groups.length).toBe(3);
+    expect(groups.map((g) => g.minY)).toEqual([0, 2, 3]);
+  });
+
+  it('splits a very long row at ROW_CAP', () => {
+    const blocks: BuildBlock[] = [];
+    for (let x = 0; x < ROW_CAP + 10; x++) blocks.push(b(x, 0, 0));
+    const groups = groupSteps(blocks, { cap: 'row' });
+    expect(groups.length).toBe(2);
+    expect(groups[0]!.count).toBe(ROW_CAP);
+    expect(groups[1]!.count).toBe(10);
+    expect(groups[1]!.first).toBe(ROW_CAP);
+  });
+
+  it('counts each block exactly once across rows and layers', () => {
+    const blocks: BuildBlock[] = [];
+    for (let y = 0; y < 4; y++) for (let z = 0; z < 3; z++) for (let x = 0; x < 7; x++) {
+      if ((x + z + y) % 5 === 0) continue; // irregular holes
+      blocks.push(b(x, y, z));
+    }
+    const groups = groupSteps(blocks, { cap: 'row' });
+    expect(groups.reduce((a, g) => a + g.count, 0)).toBe(blocks.length);
+    // monotone tiling
+    let cursor = 0;
+    for (const g of groups) {
+      expect(g.first).toBe(cursor);
+      cursor += g.count;
+    }
+    expect(cursor).toBe(blocks.length);
   });
 });

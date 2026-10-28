@@ -86,22 +86,85 @@ export function normalizeTexturePath(value: string, namespace: string): string {
 interface ModelJson {
   parent?: string;
   textures?: Record<string, string>;
+  elements?: RawModelElement[];
 }
 
-/** Strip an optional namespace: "minecraft:block/x" → "block/x". */
-function stripNamespace(ref: string): string {
-  const colon = ref.indexOf(':');
-  return colon === -1 ? ref : ref.slice(colon + 1);
+/** One `elements[]` entry, exactly as in the model JSON (unparsed uv/rot). */
+export interface RawModelElement {
+  from?: number[];
+  to?: number[];
+  faces?: Record<string, { texture?: string; uv?: number[]; rotation?: number } | undefined>;
+  rotation?: { origin?: number[]; axis?: string; angle?: number };
+}
+
+export interface MergedModel {
+  /** Merged textures across the chain (child wins), "#ref" resolved. */
+  textures: Record<string, string>;
+  /** elements[] of the shallowest chain model that defines them, or null. */
+  elements: RawModelElement[] | null;
 }
 
 /**
- * Merge a model's textures over its parent chain (child wins), resolving
- * "#ref" values against the merged map. Returns null only when the first
- * model file is missing; missing parents (e.g. builtin/generated, which
- * has no file in any resource pack) end the chain with the textures
- * collected so far — vanilla treats those as terminal.
+ * Model refs a palette entry selects: variant match (most specific wins)
+ * plus all matching multipart parts, in order. Null when the blockstate
+ * file is missing or no variant matched.
  */
-function resolveModelTextures(ref: string, tree: AssetsTree): Record<string, string> | null {
+export function modelRefsFor(paletteEntry: string, tree: AssetsTree): string[] | null {
+  const { namespace, base, props } = parsePaletteEntry(paletteEntry);
+  const state = tree.get(`${namespace}/blockstates/${base}.json`) as
+    | { variants?: Record<string, unknown>; multipart?: { when?: unknown; apply: unknown }[] }
+    | undefined;
+  if (!state || typeof state !== 'object') return null;
+
+  const refs: string[] = [];
+  if (state.variants) {
+    let best: string | null = null;
+    let bestScore = -1;
+    for (const key of Object.keys(state.variants)) {
+      if (!variantKeyMatches(key, props)) continue;
+      const score = key === '' ? 0 : key.split(',').length;
+      if (score > bestScore) {
+        bestScore = score;
+        best = key;
+      }
+    }
+    if (best === null) return null;
+    const variant = state.variants[best];
+    const modelRef = (variant: unknown): string | null => {
+      if (Array.isArray(variant)) return variant.length > 0 ? modelRef(variant[0]) : null;
+      if (variant && typeof variant === 'object' && typeof (variant as { model?: unknown }).model === 'string') {
+        return (variant as { model: string }).model;
+      }
+      return null;
+    };
+    const ref = modelRef(variant);
+    if (!ref) return null;
+    refs.push(ref);
+  }
+  if (state.multipart) {
+    for (const part of state.multipart) {
+      if (!whenMatches(part.when, props)) continue;
+      const apply = part.apply;
+      const ref = Array.isArray(apply)
+        ? typeof apply[0] === 'object' && apply[0] !== null
+          ? (apply[0] as { model?: unknown }).model
+          : null
+        : typeof apply === 'object' && apply !== null
+          ? (apply as { model?: unknown }).model
+          : null;
+      if (typeof ref === 'string') refs.push(ref);
+    }
+  }
+  return refs.length > 0 ? refs : null;
+}
+
+/**
+ * Walk one model ref's parent chain once: merged textures (child wins,
+ * "#ref" resolved) plus the elements[] of the shallowest model that defines
+ * them. Null only when the first model file is missing; missing parents end
+ * the chain (vanilla treats builtin/generated as terminal).
+ */
+export function loadMergedModel(ref: string, tree: AssetsTree): MergedModel | null {
   const chain: ModelJson[] = [];
   const seen = new Set<string>();
   let current: string | undefined = ref;
@@ -128,11 +191,18 @@ function resolveModelTextures(ref: string, tree: AssetsTree): Record<string, str
             : '';
     }
   }
-  const out: Record<string, string> = {};
+  const textures: Record<string, string> = {};
   for (const [key, value] of Object.entries(merged)) {
-    out[key] = value.startsWith('#') ? (merged[value.slice(1)] ?? '') : value;
+    textures[key] = value.startsWith('#') ? (merged[value.slice(1)] ?? '') : value;
   }
-  return out;
+  const withElements = chain.find((m) => Array.isArray(m.elements) && m.elements.length > 0);
+  return { textures, elements: withElements ? withElements.elements! : null };
+}
+
+/** Strip an optional namespace: "minecraft:block/x" → "block/x". */
+function stripNamespace(ref: string): string {
+  const colon = ref.indexOf(':');
+  return colon === -1 ? ref : ref.slice(colon + 1);
 }
 
 /** Candidate texture keys per face, in priority order. */
@@ -184,61 +254,16 @@ function whenMatches(when: unknown, props: Record<string, string>): boolean {
  * the existing color fallback.
  */
 export function resolveBlockstate(paletteEntry: string, tree: AssetsTree): ResolvedBlock | null {
-  const { namespace, base, props } = parsePaletteEntry(paletteEntry);
-  const state = tree.get(`${namespace}/blockstates/${base}.json`) as
-    | { variants?: Record<string, unknown>; multipart?: { when?: unknown; apply: unknown }[] }
-    | undefined;
-  if (!state || typeof state !== 'object') return null;
-
-  // Collect candidate model refs: variant match (most specific wins) and
-  // all matching multipart parts, in order.
-  const refs: string[] = [];
-  if (state.variants) {
-    let best: string | null = null;
-    let bestScore = -1;
-    for (const key of Object.keys(state.variants)) {
-      if (!variantKeyMatches(key, props)) continue;
-      const score = key === '' ? 0 : key.split(',').length;
-      if (score > bestScore) {
-        bestScore = score;
-        best = key;
-      }
-    }
-    if (best === null) return null;
-    const variant = state.variants[best];
-    const modelRef = (variant: unknown): string | null => {
-      if (Array.isArray(variant)) return variant.length > 0 ? modelRef(variant[0]) : null;
-      if (variant && typeof variant === 'object' && typeof (variant as { model?: unknown }).model === 'string') {
-        return (variant as { model: string }).model;
-      }
-      return null;
-    };
-    const ref = modelRef(variant);
-    if (!ref) return null;
-    refs.push(ref);
-  }
-  if (state.multipart) {
-    for (const part of state.multipart) {
-      if (!whenMatches(part.when, props)) continue;
-      const apply = part.apply;
-      const ref = Array.isArray(apply)
-        ? typeof apply[0] === 'object' && apply[0] !== null
-          ? (apply[0] as { model?: unknown }).model
-          : null
-        : typeof apply === 'object' && apply !== null
-          ? (apply as { model?: unknown }).model
-          : null;
-      if (typeof ref === 'string') refs.push(ref);
-    }
-  }
-  if (refs.length === 0) return null;
+  const { namespace } = parsePaletteEntry(paletteEntry);
+  const refs = modelRefsFor(paletteEntry, tree);
+  if (!refs) return null;
 
   // Merge textures across the applied models (later parts layer on top).
   let merged: Record<string, string> | null = null;
   for (const ref of refs) {
-    const textures = resolveModelTextures(ref, tree);
-    if (!textures) return null;
-    merged = { ...(merged ?? {}), ...textures };
+    const model = loadMergedModel(ref, tree);
+    if (!model) return null;
+    merged = { ...(merged ?? {}), ...model.textures };
   }
   const textures = merged!;
 

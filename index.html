@@ -239,13 +239,23 @@
           <p id="texture-report"></p>
           <h3>Bouwgids</h3>
           <div class="row">
-            <label for="guide-cap">Blocks per stap:</label>
+            <label for="guide-cap">Stapgrootte:</label>
             <select id="guide-cap">
-              <option value="4">4</option>
-              <option value="8" selected>8</option>
-              <option value="12">12</option>
-              <option value="24">24</option>
-              <option value="per-block">per blok</option>
+              <option value="per-block">blok voor blok</option>
+              <option value="row">rij voor rij</option>
+              <option value="4">4 blocks</option>
+              <option value="8" selected>8 blocks</option>
+              <option value="12">12 blocks</option>
+              <option value="24">24 blocks</option>
+            </select>
+          </div>
+          <div class="row">
+            <label for="guide-dir">Bouwrichting:</label>
+            <select id="guide-dir">
+              <option value="default" selected>standaard (z+, x+)</option>
+              <option value="x">X omgekeerd (x−)</option>
+              <option value="z">Z omgekeerd (z−)</option>
+              <option value="xz">X+Z omgekeerd</option>
             </select>
           </div>
         </div>

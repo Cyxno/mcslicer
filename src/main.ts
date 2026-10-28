@@ -19,6 +19,17 @@ if (deepFile && !deepFile.includes('..') && deepFile.endsWith('.schem')) {
       const bytes = new Uint8Array(await (await fetch(new URL(deepFile, document.baseURI))).arrayBuffer());
       await viewer.loadFile(bytes, deepFile);
       if (params.get('guide') === '1') viewer.setGuideMode(true);
+      const dir = params.get('dir');
+      if (dir === 'x' || dir === 'z' || dir === 'xz') {
+        viewer.setGuideDir({
+          dirX: dir === 'x' || dir === 'xz' ? -1 : 1,
+          dirZ: dir === 'z' || dir === 'xz' ? -1 : 1,
+        });
+      }
+      const cap = params.get('cap');
+      if (cap === 'per-block' || cap === 'row' || (cap && /^\d+$/.test(cap))) {
+        viewer.setGuideCap(cap === 'per-block' || cap === 'row' ? cap : Number(cap) as never);
+      }
       const step = Number(params.get('step'));
       if (Number.isInteger(step) && step >= 0) {
         if (params.get('guide') === '1') viewer.setGuideStep(step);

@@ -228,3 +228,53 @@ describe('faceAdjacent', () => {
     expect(faceAdjacent(a, { x: 1, y: 1, z: 1 })).toBe(false);
   });
 });
+
+describe('orderBlocks — build direction (P2)', () => {
+  const b = (x: number, y: number, z: number): BuildBlock => ({ x, y, z, paletteIndex: 1, block: 'minecraft:stone' });
+
+  function floor(w: number, d: number): BuildBlock[] {
+    const out: BuildBlock[] = [];
+    for (let z = 0; z < d; z++) for (let x = 0; x < w; x++) out.push(b(x, 0, z));
+    return out;
+  }
+
+  it('default direction equals the historical order exactly', () => {
+    const blocks = floor(4, 3);
+    const a = orderBlocks(blocks);
+    const def = orderBlocks(blocks, { dirX: 1, dirZ: 1 });
+    expect(def).toEqual(a);
+    expect(a.map((x) => `${x.x},${x.z}`)).toEqual(['0,0', '1,0', '2,0', '3,0', '0,1', '1,1', '2,1', '3,1', '0,2', '1,2', '2,2', '3,2']);
+  });
+
+  it('reversed X walks the layer east→west within each row', () => {
+    const ordered = orderBlocks(floor(3, 1), { dirX: -1, dirZ: 1 });
+    expect(ordered.map((x) => x.x)).toEqual([2, 1, 0]);
+  });
+
+  it('reversed Z walks the rows north→south', () => {
+    const ordered = orderBlocks(floor(2, 3), { dirX: 1, dirZ: -1 });
+    expect(ordered.map((x) => `${x.x},${x.z}`)).toEqual(['0,2', '1,2', '0,1', '1,1', '0,0', '1,0']);
+  });
+
+  it('combined X+Z reverses both; every direction keeps support-first', () => {
+    const blocks = [
+      b(0, 0, 0), b(1, 0, 0), b(2, 0, 0),
+      b(2, 1, 0), // stands on (2,0,0)
+    ];
+    for (const dir of [{ dirX: 1, dirZ: 1 }, { dirX: -1, dirZ: 1 }, { dirX: 1, dirZ: -1 }, { dirX: -1, dirZ: -1 }] as const) {
+      const ordered = orderBlocks(blocks, dir);
+      expect(ordered.length).toBe(4);
+      const pos = new Map(ordered.map((x, i) => [`${x.x},${x.y},${x.z}`, i]));
+      expect(pos.get('2,1,0')!).toBeGreaterThan(pos.get('2,0,0')!);
+    }
+    const reversed = orderBlocks(blocks, { dirX: -1, dirZ: -1 });
+    expect(reversed.slice(0, 3).map((x) => `${x.x},${x.z}`)).toEqual(['2,0', '1,0', '0,0']);
+  });
+
+  it('is a raster order, not an optimality claim: output stays a permutation', () => {
+    const blocks = floor(3, 3);
+    const sum = (dir: { dirX: 1 | -1; dirZ: 1 | -1 }) =>
+      orderBlocks(blocks, dir).map((x) => `${x.x},${x.y},${x.z}`).sort().join('|');
+    expect(sum({ dirX: -1, dirZ: -1 })).toBe(sum({ dirX: 1, dirZ: 1 }));
+  });
+});

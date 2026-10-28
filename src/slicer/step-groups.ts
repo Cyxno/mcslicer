@@ -8,10 +8,13 @@
  */
 import { baseTypeName, type BuildBlock } from './build-order.js';
 
-/** Group caps offered in the UI; 'per-block' is one block per step. */
-export type CapOption = 4 | 8 | 12 | 24 | 'per-block';
-export const CAP_OPTIONS: readonly CapOption[] = [4, 8, 12, 24, 'per-block'];
+/** Group caps offered in the UI; 'per-block' is one block per step,
+ * 'row' groups by raster row (same y and z in build order). */
+export type CapOption = 4 | 8 | 12 | 24 | 'per-block' | 'row';
+export const CAP_OPTIONS: readonly CapOption[] = [4, 8, 12, 24, 'row', 'per-block'];
 export const DEFAULT_CAP: CapOption = 12;
+/** Safety cap for row groups: a very long row splits into segments. */
+export const ROW_CAP = 64;
 
 export interface StepGroup {
   index: number;
@@ -27,9 +30,9 @@ export interface StepGroup {
   maxZ: number;
 }
 
-function capOf(opts: { cap?: CapOption } | undefined): number {
-  const cap = opts?.cap ?? DEFAULT_CAP;
-  return cap === 'per-block' ? 1 : cap;
+/** Row key: blocks in the same raster row share y and z. */
+function rowOf(b: { x: number; y: number; z: number }): string {
+  return `${b.y},${b.z}`;
 }
 
 function key(b: { x: number; y: number; z: number }): string {
@@ -49,9 +52,12 @@ export function groupSteps(
   blocks: readonly BuildBlock[],
   opts: { cap?: CapOption } = {},
 ): StepGroup[] {
-  const cap = capOf(opts);
+  const cap = opts?.cap ?? DEFAULT_CAP;
+  const numericCap = cap === 'per-block' ? 1 : cap === 'row' ? ROW_CAP : cap;
+  const byRow = cap === 'row';
   const groups: StepGroup[] = [];
   let cur: StepGroup | null = null;
+  let rowKey: string | null = null;
   let cells: Set<string> = new Set();
 
   const open = (i: number, b: BuildBlock): void => {
@@ -63,6 +69,7 @@ export function groupSteps(
       minY: b.y, maxY: b.y,
       minZ: b.z, maxZ: b.z,
     };
+    rowKey = byRow ? rowOf(b) : null;
     cells = new Set([key(b)]);
   };
   const extend = (b: BuildBlock): void => {
@@ -84,9 +91,14 @@ export function groupSteps(
       open(i, b);
       return;
     }
-    const full = cur.count >= cap;
-    const adjacent = hasNeighbourIn(b, cells);
-    if (!adjacent || full) {
+    // 'row' closes on a raster-row change INSTEAD of adjacency; both keep
+    // the safety cap. Input is the build order, so same-row blocks are
+    // contiguous up to support-first detours (a split row is two
+    // segments — still exactly once each).
+    const close = byRow
+      ? rowOf(b) !== rowKey || cur.count >= numericCap
+      : !hasNeighbourIn(b, cells) || cur.count >= numericCap;
+    if (close) {
       groups.push(cur);
       open(i, b);
     } else {

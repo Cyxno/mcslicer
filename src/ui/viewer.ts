@@ -42,7 +42,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { parseSchem } from '../schem/parse.js';
 import { FORMAT_LABELS } from '../schem/types.js';
 import type { Schematic } from '../schem/types.js';
-import { orderBlocks, type BuildBlock } from '../slicer/build-order.js';
+import { orderBlocks, DEFAULT_DIRECTION, type BuildBlock, type BuildDirection } from '../slicer/build-order.js';
 import {
   groupSteps,
   jumpInfo,
@@ -75,6 +75,8 @@ import { framingForStep } from '../render/framing.js';
 import { blockCenterLocal, fitScale, gridSpan, localToWorld, modelMatrix, worldToBlock } from '../render/transform.js';
 import { blockInfo, pointerToNdc, toggleValue } from '../render/picking.js';
 import { resolveBlockstate } from '../textures/atlas.js';
+import { elementsForRender } from '../textures/models.js';
+import { buildModelArrays, modelQuads } from '../render/model-geometry.js';
 import { boxFaceUVs } from '../textures/faces.js';
 import { buildAtlas, type AtlasResult } from '../textures/loader.js';
 import { treeFromAssetFiles, type AssetFiles } from '../textures/assets.js';
@@ -181,6 +183,7 @@ export class Viewer {
   private guideMode = false;
   private guideStep = 0;
   private guideCap: CapOption = 8;
+  private guideDir: BuildDirection = DEFAULT_DIRECTION;
   private ordered: BuildBlock[] = [];
   private groups: StepGroup[] = [];
   private guideMeshes: Array<{ mesh: InstancedMesh; group: number; paletteIndex: number; base: Color }> = [];
@@ -684,7 +687,7 @@ export class Viewer {
     this.model = buildSlicerModel(schem, axis);
     // Bouwgids-basis (4h D): orderBlocks re-sorts independently of the
     // viewing axis, so the guide is identical on every axis choice.
-    this.ordered = orderBlocks(this.model.steps);
+    this.ordered = orderBlocks(this.model.steps, this.guideDir);
     this.groups = groupSteps(this.ordered, { cap: this.guideCap });
     this.guideStep = 0;
     this.state = initialState();
@@ -751,6 +754,31 @@ export class Viewer {
       const resolved = this.atlas && this.atlasTexture
         ? resolveForRender(block, this.assetTree, dtree)
         : null;
+      // Full model geometry (5a): when the selected models define
+      // elements[], build exact geometry with per-face uv. Falls back to
+      // the UV-mapped cube, then to color rendering — the same source
+      // order (user > default) the atlas and status split use.
+      const modelElements = this.atlas && this.atlasTexture
+        ? elementsForRender(block, this.assetTree, dtree)
+        : null;
+      let handled = false;
+      if (modelElements && this.atlas) {
+        const quads = modelQuads(modelElements);
+        const arrays = buildModelArrays(quads, (path) => this.atlas!.uvRects.get(path) ?? null);
+        if (arrays.indices.length > 0) {
+          const geom = new BufferGeometry();
+          geom.setAttribute('position', new BufferAttribute(arrays.positions, 3));
+          geom.setAttribute('uv', new BufferAttribute(arrays.uvs, 2));
+          geom.setIndex(new BufferAttribute(arrays.indices, 1));
+          this.texturedGeoms.push(geom);
+          typeGeometry.set(p, geom);
+          typeToSlot.set(p, this.brightMats.length);
+          const tint = tintForBlock(block);
+          this.brightMats.push(new MeshLambertMaterial({ map: this.atlasTexture, color: tint ?? 0xffffff, alphaTest: 0.5 }));
+          handled = true;
+        }
+      }
+      if (handled) continue;
       const rects = resolved && this.atlas
         ? {
             px: this.atlas.uvRects.get(resolved.faces.px ?? '') ?? null,
@@ -1347,10 +1375,28 @@ export class Viewer {
 
   /** Granularity switch: regroup, keep progress at the same first block. */
   setGuideCap(cap: CapOption): void {
-    const keep = this.groups[this.guideStep]?.first ?? 0;
     this.guideCap = cap;
+    this.rebuildGuide();
+  }
+
+  /** Raster direction (P2): re-order the build, keep progress at the same
+   * first block — same position-preserving rule as setGuideCap. */
+  setGuideDir(dir: BuildDirection): void {
+    this.guideDir = dir;
+    this.rebuildGuide();
+  }
+
+  guideDirection(): BuildDirection {
+    return this.guideDir;
+  }
+
+  /** Re-run orderBlocks + grouping on the current direction/cap, keeping
+   * the group that contains the current first block. */
+  private rebuildGuide(): void {
+    const keep = this.groups[this.guideStep]?.first ?? 0;
     if (!this.model || this.ordered.length === 0) return;
-    this.groups = groupSteps(this.ordered, { cap });
+    this.ordered = orderBlocks(this.model.steps, this.guideDir);
+    this.groups = groupSteps(this.ordered, { cap: this.guideCap });
     this.guideStep = Math.max(
       this.groups.findIndex((g) => g.first <= keep && keep < g.first + g.count),
       0,
@@ -1512,11 +1558,18 @@ export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, dem
     viewer.setNoclip(!on); // active badge = noclip UIT (botsing aan)
   });
 
-  // Bouwgids: stappen langs de bouwvolgorde; granulariteit in Instellingen.
+  // Bouwgids: stappen langs de bouwvolgorde; granulariteit + richting in
+  // Instellingen. Wijzigen hergroepeert zonder de schematic te herladen en
+  // behoudt de positie (eerste blok van de huidige stap).
   $('btn-guide')?.addEventListener('click', () => viewer.toggleGuideMode());
   $('guide-cap')?.addEventListener('change', (e) => {
     const v = (e.target as HTMLSelectElement).value;
-    viewer.setGuideCap(v === 'per-block' ? 'per-block' : Number(v) as CapOption);
+    viewer.setGuideCap(v === 'per-block' || v === 'row' ? v : Number(v) as CapOption);
+  });
+  $('guide-dir')?.addEventListener('change', (e) => {
+    const v = (e.target as HTMLSelectElement).value;
+    const dir = { dirX: v === 'x' || v === 'xz' ? -1 as const : 1 as const, dirZ: v === 'z' || v === 'xz' ? -1 as const : 1 as const };
+    viewer.setGuideDir(dir);
   });
 
   // Bottom-center toolbar + settings popover.

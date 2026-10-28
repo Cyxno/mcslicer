@@ -122,10 +122,17 @@ variants, missing PNGs and undecodable PNGs are counted and surfaced in
 the status line ("N textures → kleur-fallback") instead of failing or
 crashing.
 
-**Known limitations:** face selection is heuristic over texture keys
-(`all`/`side`/`top`/`end`/…); per-face UVs inside model `elements[]` are
-not read; tinting is approximated with **fixed colors** applied to
-the whole block (`src/textures/tint.ts`: grass
+**Known limitations:** face selection for the UV-mapped **cube** fallback
+is heuristic over texture keys (`all`/`side`/`top`/`end`/…). Model
+geometry (phase 5a) reads `elements[]` — from/to, per-face `uv` +
+`rotation`, element `rotation` (±45° on one axis) — and renders stairs,
+slabs, rails, torches, levers, fences etc. exactly; types whose selected
+models define no `elements[]` render as the UV-mapped cube, types with no
+resolvable model keep color rendering (counted in the status line).
+Not supported: `cullface` (intentionally ignored — a build guide shows
+interior faces), "third-person"-style builtin models, per-element shade
+and ambient-occlusion. Tinting is approximated with **fixed colors**
+applied to the whole block (`src/textures/tint.ts`: grass
 0x91BD59, foliage 0x77AB2F, redstone dust 0xFF0000, water 0x3F76E4,
 fixed birch/spruce leaf colors) — real
 per-face, per-biome coloring is out of scope; animated textures use

@@ -75,17 +75,34 @@ const NEIGHBORS: ReadonlyArray<readonly [number, number, number]> = [
   [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
 ];
 
+/** Raster direction within each layer. Bottom-up building is fixed; these
+ * only flip the scan order inside a layer (P2). */
+export interface BuildDirection {
+  dirX: 1 | -1;
+  dirZ: 1 | -1;
+}
+
+export const DEFAULT_DIRECTION: BuildDirection = { dirX: 1, dirZ: 1 };
+
 /**
  * Order blocks for building. Input order is irrelevant (it is re-sorted);
  * the output contains exactly the input blocks, once each, in placement
- * order. Deterministic: same input → same output, always.
+ * order. Deterministic: same input → same output, always. The direction
+ * only re-orders the candidate scan within a layer — the dependency rules
+ * (support-first) apply identically in every direction, so the result is a
+ * raster order, NOT a claim of physical optimality for every block.
  */
 export function orderBlocks(
   blocks: readonly BuildBlock[],
+  direction: BuildDirection = DEFAULT_DIRECTION,
 ): BuildBlock[] {
-  // Candidate order: layer-by-layer from the bottom, then lexicographic.
+  // Candidate order: layer-by-layer from the bottom, then lexicographic
+  // along the chosen raster direction.
   const scan = [...blocks].sort(
-    (a, b) => a.y - b.y || a.z - b.z || a.x - b.x,
+    (a, b) =>
+      a.y - b.y ||
+      (a.z - b.z) * direction.dirZ ||
+      (a.x - b.x) * direction.dirX,
   );
   const scanIndex = new Map<string, number>();
   scan.forEach((b, i) => scanIndex.set(key(b.x, b.y, b.z), i));

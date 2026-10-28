@@ -23,8 +23,14 @@ const TORCH = 'minecraft:redstone_torch[lit=true]';
 const RAIL = 'minecraft:rail[shape=north_south]';
 const WATER = 'minecraft:water[level=0]';
 const LEVER = 'minecraft:lever[face=floor,facing=north,powered=false]';
+const STAIRS_N = 'minecraft:oak_stairs[facing=north,half=bottom,shape=straight,waterlogged=false]';
+const STAIRS_E = 'minecraft:oak_stairs[facing=east,half=bottom,shape=straight,waterlogged=false]';
+const STAIRS_WT = 'minecraft:oak_stairs[facing=west,half=top,shape=straight,waterlogged=false]';
+const SLAB_B = 'minecraft:oak_slab[type=bottom,waterlogged=false]';
+const SLAB_T = 'minecraft:oak_slab[type=top,waterlogged=false]';
+const FENCE = 'minecraft:oak_fence[north=true,east=true,south=false,west=false,waterlogged=false]';
 
-const paletteEntries = [AIR, GRASS, REDSTONE, TORCH, RAIL, WATER, LEVER];
+const paletteEntries = [AIR, GRASS, REDSTONE, TORCH, RAIL, WATER, LEVER, STAIRS_N, STAIRS_E, STAIRS_WT, SLAB_B, SLAB_T, FENCE];
 const P = Object.fromEntries(paletteEntries.map((name, i) => [name, i]));
 
 const blocks = new Uint8Array(W * H * L).fill(P[AIR]!);
@@ -46,6 +52,15 @@ set(1, 1, 1, P[LEVER]!);
 set(7, 1, 6, P[WATER]!);
 set(8, 1, 6, P[WATER]!);
 set(7, 1, 7, P[WATER]!);
+
+// model-geometry showcase (5a): stairs in three orientations, slabs, fence
+set(1, 1, 7, P[STAIRS_N]!);
+set(2, 1, 7, P[STAIRS_E]!);
+set(1, 2, 7, P[STAIRS_WT]!); // upside-down stairs floating on the lower one
+set(3, 1, 7, P[SLAB_B]!);
+set(4, 1, 7, P[SLAB_T]!);
+set(5, 1, 7, P[FENCE]!);
+set(5, 1, 6, P[FENCE.replace('east=true', 'east=false').replace('north=true', 'north=false').replace('south=false', 'south=true')]!);
 
 const blockData: number[] = [];
 for (const v of blocks) {
