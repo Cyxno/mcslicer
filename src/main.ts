@@ -183,6 +183,22 @@ schemInput.addEventListener('change', async () => {
   schemInput.value = '';
 });
 
+// ---- Materials drawer (small screens): toggle + auto-collapse on pick ----
+const panelToggle = document.getElementById('panel-toggle');
+const setPanelCollapsed = (collapsed: boolean): void => {
+  document.body.classList.toggle('panel-collapsed', collapsed);
+  panelToggle?.setAttribute('aria-expanded', String(!collapsed));
+};
+panelToggle?.addEventListener('click', () => {
+  setPanelCollapsed(!document.body.classList.contains('panel-collapsed'));
+});
+// Picking a material is done — give the canvas back on narrow screens.
+document.getElementById('materials-body')?.addEventListener('click', () => {
+  if (window.matchMedia('(max-width: 900px)').matches) setPanelCollapsed(true);
+});
+// On phones/tablets start collapsed so the canvas owns the screen.
+if (window.matchMedia('(max-width: 900px)').matches) setPanelCollapsed(true);
+
 // ---- Intro overlay (first visit only, keyboard operable) ----
 const intro = document.getElementById('intro');
 let introOpen = false;

@@ -54,6 +54,8 @@
         --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Menlo, monospace;
       }
       html, body { margin: 0; height: 100%; font-family: var(--font); background: var(--bg); color: var(--text); }
+      /* Visible keyboard focus everywhere, tuned for the dark theme. */
+      :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
       #app {
         display: grid; grid-template-rows: auto 1fr auto;
         grid-template-columns: 1fr 300px; height: 100%;
@@ -310,6 +312,28 @@
       #load-error .err-actions { display: flex; gap: 8px; margin-top: 12px; }
       #status { font-size: 13px; color: var(--text-dim); }
       #status.error { color: var(--danger); font-weight: 600; }
+      /* ---- site footer (privacy + source) ---- */
+      #site-footer {
+        grid-column: 1 / 3; display: flex; gap: 6px 18px; align-items: center; flex-wrap: wrap;
+        padding: 6px 14px; border-top: 1px solid var(--line); background: var(--panel);
+        color: var(--text-faint); font-size: 11.5px;
+      }
+      #site-footer a { color: var(--text-dim); text-decoration: none; }
+      #site-footer a:hover, #site-footer a:focus-visible { color: var(--text); text-decoration: underline; }
+      /* ---- mobile: single column + collapsible materials drawer ---- */
+      #panel-toggle { display: none; }
+      @media (max-width: 900px) {
+        #app { grid-template-columns: 1fr; }
+        #topbar, #slicerbar, #hints, #site-footer { grid-column: 1 / -1; }
+        #panel-toggle { display: inline-flex; }
+        #panel {
+          position: fixed; top: 0; right: 0; bottom: 0; z-index: 30;
+          width: min(300px, 85vw);
+          transform: translateX(0); transition: transform .18s ease;
+          box-shadow: -12px 0 32px #0008;
+        }
+        body.panel-collapsed #panel { transform: translateX(100%); }
+      }
     </style>
   </head>
   <body>
@@ -320,6 +344,8 @@
         <span id="device-badge" title="Bestanden verlaten je toestel niet — alles wordt lokaal verwerkt">Op je toestel</span>
         <span class="spacer"></span>
         <button id="demo-btn" class="btn primary">Demo huisje</button>
+        <button id="panel-toggle" class="btn" aria-expanded="true" aria-controls="panel"
+                title="Materialenpaneel tonen/verbergen">◧ Materialen</button>
         <button id="settings-btn" class="btn" title="Textures instellen">⚙ Instellingen</button>
         <div id="assets-pop" hidden>
           <h3>Block-textures</h3>
@@ -418,7 +444,7 @@
         </div>
         <input id="schem-file" class="hidden-input" type="file" accept=".schem,.schematic" />
       </div>
-      <div id="panel">
+      <div id="panel" aria-label="Materialen">
         <h2>Materialen <span id="mat-slice-label"></span></h2>
         <table id="materials">
           <thead>
@@ -454,6 +480,10 @@
         Explore: klik = muis grijpen, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>Space</kbd>/<kbd>Shift</kbd>, <kbd>Esc</kbd> = los ·
         sleep een <kbd>.schem</kbd> op het canvas
       </div>
+      <footer id="site-footer">
+        <span>🔒 Bestanden en assets worden uitsluitend lokaal in je browser verwerkt.</span>
+        <a href="https://github.com/Cyxno/mcslicer" target="_blank" rel="noopener noreferrer">Broncode op GitHub</a>
+      </footer>
     </div>
     <div id="intro" role="dialog" aria-modal="true" aria-labelledby="intro-title" hidden>
       <div class="intro-card">
