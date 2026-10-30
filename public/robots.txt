@@ -1,0 +1,7 @@
+# mcslicer wordt gehost onder /mcslicer/. De gezagsvolle robots.txt voor het
+# domein staat op https://cyxno.eu/robots.txt; deze kopie documenteert het
+# subpad voor crawlers die hem hier vinden.
+User-agent: *
+Allow: /
+
+Sitemap: https://cyxno.eu/mcslicer/sitemap.xml

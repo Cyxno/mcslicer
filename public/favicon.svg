@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- mcslicer brand mark: stacked layers = slices. Self-made, neutral. -->
+  <rect x="1" y="1" width="62" height="62" rx="14" fill="#14161d" stroke="#23262e" stroke-width="2"/>
+  <rect x="14" y="12" width="36" height="8" rx="2" fill="#3d7dff"/>
+  <rect x="14" y="28" width="36" height="8" rx="2" fill="#8b94a3"/>
+  <rect x="14" y="44" width="36" height="8" rx="2" fill="#333a48"/>
+</svg>

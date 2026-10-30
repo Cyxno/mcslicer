@@ -10,6 +10,18 @@ const canvas = document.getElementById('viewer') as HTMLCanvasElement;
 const status = document.getElementById('status')!;
 const emptyState = document.getElementById('empty-state');
 
+// Warm the same-origin default-assets manifest under whatever base the app
+// is served from; the viewer's later fetch() reuses this in-flight request.
+// (Static <link rel=preload> in index.html can't know the deploy base.)
+{
+  const preload = document.createElement('link');
+  preload.rel = 'preload';
+  preload.as = 'fetch';
+  preload.crossOrigin = 'anonymous';
+  preload.href = new URL('default-assets/manifest.json', document.baseURI).href;
+  document.head.append(preload);
+}
+
 // The viewer (three.js + nbt parser) lives in a lazy chunk: the empty page
 // paints from the entry alone and the module loads at first use — or at
 // idle, whichever comes first — so it never blocks the first render.
