@@ -1,6 +1,7 @@
 // Must run before any import that touches prismarine-nbt (evaluated in order).
 import './schem/nodeShims.js';
 import { assetFilesFromFiles, assetFilesFromZip, AssetError } from './textures/assets.js';
+import { introSeen, isIntroDismissKey, markIntroSeen } from './ui/intro.js';
 import type { Viewer } from './ui/viewer.js';
 import demoUrl from './assets/demo-huisje.schem?url';
 
@@ -114,3 +115,63 @@ zipInput.addEventListener('change', async () => {
 
 // Demo button (topbar; the intro overlay and empty state reuse loadDemo).
 document.getElementById('demo-btn')?.addEventListener('click', () => void loadDemo());
+
+// ---- Intro overlay (first visit only, keyboard operable) ----
+const intro = document.getElementById('intro');
+let introOpen = false;
+let introReturnFocus: HTMLElement | null = null;
+
+function focusablesIn(root: HTMLElement): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>(
+    'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+  )];
+}
+
+function showIntro(): void {
+  if (!intro || introOpen) return;
+  introOpen = true;
+  intro.hidden = false;
+  document.getElementById('app')?.setAttribute('inert', '');
+  introReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  focusablesIn(intro)[0]?.focus();
+}
+
+function closeIntro(): void {
+  if (!intro || !introOpen) return;
+  introOpen = false;
+  intro.hidden = true;
+  document.getElementById('app')?.removeAttribute('inert');
+  markIntroSeen(window.localStorage);
+  introReturnFocus?.focus();
+  introReturnFocus = null;
+}
+
+intro?.addEventListener('keydown', (e) => {
+  if (isIntroDismissKey(e.key)) {
+    e.preventDefault();
+    closeIntro();
+    return;
+  }
+  if (e.key !== 'Tab' || !introOpen || !intro) return;
+  // Focus trap: Tab cycles inside the dialog; if focus somehow landed
+  // outside, pull it back in.
+  const f = focusablesIn(intro);
+  if (f.length === 0) return;
+  const first = f[0]!;
+  const last = f[f.length - 1]!;
+  const active = document.activeElement;
+  const escaped = active !== null && !intro.contains(active);
+  if (e.shiftKey && (active === first || escaped)) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && (active === last || escaped)) {
+    e.preventDefault();
+    first.focus();
+  }
+});
+document.getElementById('intro-start')?.addEventListener('click', () => closeIntro());
+document.getElementById('intro-demo')?.addEventListener('click', () => {
+  closeIntro();
+  void loadDemo();
+});
+if (!introSeen(window.localStorage)) showIntro();
