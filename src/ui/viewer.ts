@@ -653,8 +653,9 @@ export class Viewer {
     this.noclip = on;
   }
 
-  /** Parse bytes and display in slicer mode; all failures are visible. */
-  async loadFile(bytes: Uint8Array, label: string, axis: Axis = 'y'): Promise<void> {
+  /** Parse bytes and display in slicer mode; all failures are visible.
+   * Returns true when the schematic is on screen (empty state hides). */
+  async loadFile(bytes: Uint8Array, label: string, axis: Axis = 'y'): Promise<boolean> {
     this.setStatus(`Parsing ${label}…`);
     this.lastLabel = label;
     try {
@@ -662,21 +663,24 @@ export class Viewer {
       this.schem = schem; // available for ensureAtlas before showSlicer
       await this.ensureAtlas(schem);
       this.showSlicer(schem, axis);
+      return true;
     } catch (err) {
       this.clearModel();
       this.showError(err, label);
+      return false;
     }
   }
 
   /** Fetch the demo asset and display; fetch failures are visible too. */
-  async loadDemo(url: string, label: string, axis: Axis = 'y'): Promise<void> {
+  async loadDemo(url: string, label: string, axis: Axis = 'y'): Promise<boolean> {
     this.setStatus(`Loading ${label}…`);
     try {
       const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
-      await this.loadFile(bytes, label, axis);
+      return await this.loadFile(bytes, label, axis);
     } catch (err) {
       this.clearModel();
       this.showError(err, label);
+      return false;
     }
   }
 

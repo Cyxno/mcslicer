@@ -7,6 +7,7 @@ import demoUrl from './assets/demo-huisje.schem?url';
 
 const canvas = document.getElementById('viewer') as HTMLCanvasElement;
 const status = document.getElementById('status')!;
+const emptyState = document.getElementById('empty-state');
 
 // The viewer (three.js + nbt parser) lives in a lazy chunk: the empty page
 // paints from the entry alone and the module loads at first use — or at
@@ -22,12 +23,14 @@ whenIdle(() => void loadViewer());
 
 async function openFile(file: File): Promise<void> {
   const viewer = await loadViewer();
-  await viewer.loadFile(new Uint8Array(await file.arrayBuffer()), file.name);
+  const ok = await viewer.loadFile(new Uint8Array(await file.arrayBuffer()), file.name);
+  if (emptyState) emptyState.hidden = ok;
 }
 
 async function loadDemo(): Promise<void> {
   const viewer = await loadViewer();
-  await viewer.loadDemo(demoUrl, 'demo-huisje.schem');
+  const ok = await viewer.loadDemo(demoUrl, 'demo-huisje.schem');
+  if (emptyState) emptyState.hidden = ok;
 }
 
 // Drag & drop: the canvas is the primary target; the window handlers only
@@ -59,7 +62,8 @@ if (deepFile && !deepFile.includes('..') && deepFile.endsWith('.schem')) {
     try {
       const bytes = new Uint8Array(await (await fetch(new URL(deepFile, document.baseURI))).arrayBuffer());
       const viewer = await loadViewer();
-      await viewer.loadFile(bytes, deepFile);
+      const ok = await viewer.loadFile(bytes, deepFile);
+      if (emptyState) emptyState.hidden = ok;
       if (params.get('guide') === '1') viewer.setGuideMode(true);
       const dir = params.get('dir');
       if (dir === 'x' || dir === 'z' || dir === 'xz') {
@@ -115,6 +119,29 @@ zipInput.addEventListener('change', async () => {
 
 // Demo button (topbar; the intro overlay and empty state reuse loadDemo).
 document.getElementById('demo-btn')?.addEventListener('click', () => void loadDemo());
+document.getElementById('empty-demo')?.addEventListener('click', () => void loadDemo());
+
+// ---- Empty state: dropzone + file picker before any schematic is loaded ----
+const dropzone = document.getElementById('dropzone');
+const schemInput = document.getElementById('schem-file') as HTMLInputElement;
+// Click = file picker (the mobile path, where drag-and-drop is unavailable).
+dropzone?.addEventListener('click', () => schemInput.click());
+dropzone?.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  dropzone.classList.add('dragover');
+});
+dropzone?.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+dropzone?.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropzone.classList.remove('dragover');
+  const file = e.dataTransfer?.files[0];
+  if (file) void openFile(file);
+});
+schemInput.addEventListener('change', async () => {
+  const file = schemInput.files?.[0];
+  if (file) await openFile(file);
+  schemInput.value = '';
+});
 
 // ---- Intro overlay (first visit only, keyboard operable) ----
 const intro = document.getElementById('intro');
