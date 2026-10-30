@@ -1511,8 +1511,10 @@ function fmtN(v: number): string {
   return r >= 0 ? `+${r}` : String(r);
 }
 
-/** Wire drag-drop, demo button and all slicer controls. No server calls. */
-export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, demoUrl?: string): Viewer {
+/** Wire all slicer controls. Drag-drop, the demo button and file
+ * opening live in main.ts (they drive the lazy viewer load); everything
+ * model-dependent is wired here. No server calls. */
+export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement): Viewer {
   const $ = (id: string): HTMLElement => document.getElementById(id)!;
   const viewer = new Viewer(canvas, {
     status: statusEl,
@@ -1523,21 +1525,6 @@ export function initViewer(canvas: HTMLCanvasElement, statusEl: HTMLElement, dem
     infoPanel: $('info-panel'),
   });
   viewer.setStatus('Sleep een .schem hierheen');
-
-  canvas.addEventListener('dragover', (e) => e.preventDefault());
-  canvas.addEventListener('drop', async (e) => {
-    e.preventDefault();
-    const file = e.dataTransfer?.files[0];
-    if (!file) return;
-    await viewer.loadFile(new Uint8Array(await file.arrayBuffer()), file.name);
-  });
-
-  const demoButton = $('demo-btn');
-  if (demoButton && demoUrl) {
-    demoButton.addEventListener('click', () => {
-      viewer.loadDemo(demoUrl, 'demo-huisje.schem');
-    });
-  }
 
   // Camera mode: Orbit (free orbit) / Plan (top-down) / Explore (fly).
   const setCam = (mode: 'orbit' | 'plan' | 'explore'): void => {
