@@ -418,9 +418,18 @@ export class Viewer {
     this.status.classList.toggle('error', isError);
   }
 
+  /** Optional UI hook for load failures — main.ts renders a human error
+   * card from it; the status line stays the single source of truth. */
+  private loadErrorHandler: ((err: unknown, label: string) => void) | null = null;
+
+  onLoadError(handler: ((err: unknown, label: string) => void) | null): void {
+    this.loadErrorHandler = handler;
+  }
+
   private showError(err: unknown, label: string): void {
     const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
     this.setStatus(`Could not load ${label}: ${detail}`, true);
+    this.loadErrorHandler?.(err, label);
   }
 
   private clearModel(): void {

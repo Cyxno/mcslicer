@@ -2,6 +2,7 @@
 import './schem/nodeShims.js';
 import { assetFilesFromFiles, assetFilesFromZip, AssetError } from './textures/assets.js';
 import { introSeen, isIntroDismissKey, markIntroSeen } from './ui/intro.js';
+import { formatLoadError } from './ui/errors.js';
 import type { Viewer } from './ui/viewer.js';
 import demoUrl from './assets/demo-huisje.schem?url';
 
@@ -14,20 +15,47 @@ const emptyState = document.getElementById('empty-state');
 // idle, whichever comes first — so it never blocks the first render.
 let viewerPromise: Promise<Viewer> | null = null;
 function loadViewer(): Promise<Viewer> {
-  viewerPromise ??= import('./ui/viewer.js').then((m) => m.initViewer(canvas, status));
+  viewerPromise ??= import('./ui/viewer.js').then((m) => {
+    const v = m.initViewer(canvas, status);
+    v.onLoadError(showLoadError);
+    return v;
+  });
   return viewerPromise;
 }
+
+// ---- Load-error card: human message + retry, never a stack trace ----
+const loadErrorCard = document.getElementById('load-error');
+
+function showLoadError(err: unknown, label: string): void {
+  if (!loadErrorCard) return;
+  const view = formatLoadError(err, label);
+  loadErrorCard.querySelector('.err-title')!.textContent = view.title;
+  loadErrorCard.querySelector('.err-detail')!.textContent = view.detail;
+  loadErrorCard.hidden = false;
+  loadErrorCard.querySelector<HTMLElement>('#err-retry')?.focus();
+}
+
+function hideLoadError(): void {
+  if (loadErrorCard) loadErrorCard.hidden = true;
+}
+document.getElementById('err-retry')?.addEventListener('click', () => {
+  hideLoadError();
+  (document.getElementById('schem-file') as HTMLInputElement | null)?.click();
+});
+document.getElementById('err-close')?.addEventListener('click', hideLoadError);
 const whenIdle: (cb: () => void) => number =
   window.requestIdleCallback?.bind(window) ?? ((cb: () => void) => window.setTimeout(cb, 250));
 whenIdle(() => void loadViewer());
 
 async function openFile(file: File): Promise<void> {
+  hideLoadError();
   const viewer = await loadViewer();
   const ok = await viewer.loadFile(new Uint8Array(await file.arrayBuffer()), file.name);
   if (emptyState) emptyState.hidden = ok;
 }
 
 async function loadDemo(): Promise<void> {
+  hideLoadError();
   const viewer = await loadViewer();
   const ok = await viewer.loadDemo(demoUrl, 'demo-huisje.schem');
   if (emptyState) emptyState.hidden = ok;
